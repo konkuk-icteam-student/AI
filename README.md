@@ -4,6 +4,8 @@
 
 건국대학교 규정 기반 RAG 챗봇을 CommuteMate 챗봇 도입 제안서에 맞게 확장한 버전.
 
+로컬·IntelliJ 테스트 절차는 [`TEST_MANUAL.md`](TEST_MANUAL.md)를 참고한다.
+
 ## 구조
 
 - **저장소**: Postgres + pgvector (CommuteMate와 동일 인스턴스 공유, `regulation_chunks` / `faq_chunks`)
