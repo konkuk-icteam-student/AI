@@ -6,6 +6,17 @@
 
 로컬·IntelliJ 테스트 절차는 [`TEST_MANUAL.md`](TEST_MANUAL.md)를 참고한다.
 
+GitHub Actions, `develop -> main` 배포 흐름과 팀 서버 설정은 [`DEPLOYMENT.md`](DEPLOYMENT.md)를 참고한다.
+
+## 브랜치·배포 흐름
+
+```text
+feature/*, fix/*, jonghwa -> PR develop -> CI -> staging
+develop -> PR main -> CI -> production
+```
+
+`develop`과 `main`에는 직접 push하지 않는다. `develop` merge는 staging, `main` merge는 production 자동 배포를 시작한다.
+
 ## 구조
 
 - **저장소**: Postgres + pgvector (CommuteMate와 동일 인스턴스 공유, `regulation_chunks` / `faq_chunks`)

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  release-source:
+    name: Validate release source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allow only develop to target main
+        if: github.base_ref == 'main' && github.head_ref != 'develop'
+        run: |
+          echo "Pull requests targeting main must come from develop."
+          exit 1
+      - name: Source branch is valid
+        if: github.base_ref != 'main' || github.head_ref == 'develop'
+        run: echo "Source branch policy passed."
+
+  syntax-check:
+    name: Python syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m compileall -q app tests
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover -s tests -v
+
+  compose-validation:
+    name: Docker Compose validation
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [staging, prod]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare validation environment
+        run: cp "deploy/${{ matrix.environment }}/.env.example" "deploy/${{ matrix.environment }}/.env"
+      - name: Validate compose file
+        env:
+          IMAGE_REPOSITORY: ghcr.io/example/chatbot
+          IMAGE_TAG: validation
+          POSTGRES_PASSWORD: validation-only
+        run: docker compose -f "deploy/${{ matrix.environment }}/compose.yaml" config --quiet

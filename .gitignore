@@ -6,3 +6,10 @@ __pycache__/
 data/chroma/
 *.bak
 *.log
+storage/**
+!storage/staging/
+!storage/staging/documents/
+!storage/staging/documents/.gitkeep
+!storage/prod/
+!storage/prod/documents/
+!storage/prod/documents/.gitkeep
