@@ -24,7 +24,7 @@ LOG_FILE="uvicorn.log"
 
 case "${1:-run}" in
     ingest)
-        .venv/bin/python -m app.ingest
+        .venv/bin/python -m app.ingestion.service
         ;;
 
     stop)
@@ -48,7 +48,7 @@ case "${1:-run}" in
         fi
 
         # 외부(로컬 Spring)에서 접근해야 하므로 0.0.0.0 바인딩
-        nohup .venv/bin/uvicorn app.api:app \
+        nohup .venv/bin/uvicorn app.main:app \
             --host 0.0.0.0 \
             --port 8000 \
             > "${LOG_FILE}" 2>&1 &

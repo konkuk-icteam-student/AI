@@ -7,10 +7,9 @@ psycopg2-binary>=2.9
 torch>=2.4
 transformers>=4.46,<5
 
-# OCR pipeline (app/ocr.py, app/pdf_extractor.py)
+# OCR pipeline (app/ingestion/ocr.py, app/ingestion/parser.py)
 pymupdf>=1.24
 opencv-python>=4.9
 numpy>=1.26
 paddleocr>=2.9
 paddlepaddle>=2.6
-

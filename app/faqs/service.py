@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.db import get_conn, to_vector_literal
-from app.faq_chunker import chunk_faq
-from app.ingest import embed_texts
+from app.infrastructure.database import get_conn, to_vector_literal
+from app.faqs.chunker import chunk_faq
+from app.ingestion.embedder import embed_texts
 
 
 def upsert_faq(

@@ -1,0 +1,45 @@
+{
+  "description": "규정 검색에 추가할 확장 질의입니다. keywords 중 하나가 질문에 들어 있으면 expansions를 검색합니다. match를 all로 설정하면 모든 keywords가 필요합니다.",
+  "rules": [
+    {
+      "name": "장학금",
+      "keywords": ["장학"],
+      "expansions": ["교내 장학금 종류 및 선발 기준", "장학생 성적 기준 및 평점 기준"]
+    },
+    {
+      "name": "소득분위",
+      "keywords": ["소득분위", "소득"],
+      "expansions": ["소득분위 저소득층 장학금 선발 기준"]
+    },
+    {
+      "name": "기초생활수급자",
+      "keywords": ["기초생활수급"],
+      "expansions": ["기초생활수급자 장학금 선발 기준"]
+    },
+    {
+      "name": "장애",
+      "keywords": ["장애"],
+      "expansions": ["장애인 또는 장애인 가족 장학금 선발 기준"]
+    },
+    {
+      "name": "휴학",
+      "keywords": ["휴학"],
+      "expansions": ["휴학 신청 자격 절차 기간", "휴학 등록금 처리 및 복학 절차"]
+    },
+    {
+      "name": "복학",
+      "keywords": ["복학"],
+      "expansions": ["복학 신청 절차 및 등록"]
+    },
+    {
+      "name": "졸업",
+      "keywords": ["졸업"],
+      "expansions": ["졸업 요건 이수학점 전공학점", "졸업 자격 및 졸업 기준"]
+    },
+    {
+      "name": "학사경고",
+      "keywords": ["학사경고"],
+      "expansions": ["학사경고 기준", "연속 학사경고 불이익 수강신청 등록 제한"]
+    }
+  ]
+}
