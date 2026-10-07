@@ -68,6 +68,8 @@ sudo chown kuai:kuai /opt/chatbot-service
 bash deploy/scripts/prepare-env.sh staging
 ```
 
+`Prepare staging environment` Actions도 동일한 스크립트를 SSH stdin으로 전달해 staging 환경을 준비한다. 컨테이너를 시작하지 않으며 설정 내용은 로그로 출력하지 않는다.
+
 이 스크립트는 64자리 랜덤 hex DB 비밀번호를 생성해 `.env`를 600 권한으로 저장한다. 비밀번호를 출력하지 않으며 기존 `.env`는 덮어쓰지 않는다. 읽기 전용으로 마운트할 문서 폴더도 미리 만들고 컨테이너 사용자가 읽을 수 있게 준비한다.
 
 ```text
