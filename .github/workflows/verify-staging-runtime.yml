@@ -77,7 +77,8 @@ jobs:
           test "$(docker inspect --format '{{.Config.Image}}' "${api}")" = "ghcr.io/konkuk-icteam-student/ai:${source_sha}"
           cd /opt/chatbot-service/storage/staging/documents
           sha256sum --quiet -c "/opt/chatbot-service/imports/staging/${source_sha}/SHA256SUMS"
-          docker exec -i "${api}" python - <<'PYTHON'
+          # Temporary diagnostic override; image HOME will be fixed before indexing.
+          docker exec -e HOME=/home/app -i "${api}" python - <<'PYTHON'
           import json
           from pathlib import Path
           from time import monotonic
