@@ -22,6 +22,7 @@ services:
       - "${PROMPTS_PATH:-../../resources/prompts}:/app/resources/prompts:ro,Z"
       - "${SEARCH_CONFIG_PATH:-../../resources/search}:/app/resources/search:ro,Z"
       - model-cache:/home/app/.cache/huggingface
+      - ocr-cache:/home/app/.paddlex
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,3 +53,4 @@ services:
 volumes:
   postgres-data:
   model-cache:
+  ocr-cache:

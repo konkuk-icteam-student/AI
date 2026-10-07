@@ -28,8 +28,12 @@ RUN mkdir -p \
         /app/documents/text_pdf \
         /app/documents/image_pdf \
         /home/app/.cache/huggingface \
+        /home/app/.paddlex \
     && chown -R app:app /app
-RUN chown -R app:app /home/app
+RUN chown -R app:app /home/app \
+    && usermod --home /home/app app
+
+ENV HOME=/home/app
 
 USER app
 
