@@ -1,0 +1,163 @@
+name: Prepare staging PDFs
+
+on:
+  push:
+    branches:
+      - ops/staging-pdfs
+    paths:
+      - .github/workflows/prepare-staging-pdfs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-pdf-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Copy and verify the deployed PDF corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PDF_SOURCE_SHA: f3923681f14f0ed7292f98607e05630b3b5de9a4
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Copy PDFs over SSH and verify their checksums and readability
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for variable in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_HOST_KEY; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Missing repository secret: ${variable}" >&2
+              exit 1
+            fi
+          done
+
+          ssh_port="${DEPLOY_PORT:-22}"
+          if [[ ! "${DEPLOY_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+              || [[ ! "${DEPLOY_USER}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
+              || [[ ! "${ssh_port}" =~ ^[0-9]{1,5}$ ]] \
+              || (( 10#${ssh_port} < 1 || 10#${ssh_port} > 65535 )); then
+            echo "Invalid deployment host, user, or port." >&2
+            exit 1
+          fi
+          ssh_port="$((10#${ssh_port}))"
+
+          umask 077
+          chatbot_ssh_dir="$(mktemp -d "${RUNNER_TEMP}/chatbot-ssh.XXXXXX")"
+          trap 'rm -f "${chatbot_ssh_dir}/id_ed25519" "${chatbot_ssh_dir}/known_hosts" "${chatbot_ssh_dir}/documents.tar.gz"; rmdir "${chatbot_ssh_dir}"' EXIT
+
+          printf '%s\n' "${DEPLOY_SSH_PRIVATE_KEY}" > "${chatbot_ssh_dir}/id_ed25519"
+          chmod 600 "${chatbot_ssh_dir}/id_ed25519"
+          ssh-keygen -y -P '' -f "${chatbot_ssh_dir}/id_ed25519" > /dev/null
+
+          if (( 10#${ssh_port} == 22 )); then
+            printf '%s %s\n' "${DEPLOY_HOST}" "${DEPLOY_HOST_KEY}" > "${chatbot_ssh_dir}/known_hosts"
+          else
+            printf '[%s]:%s %s\n' "${DEPLOY_HOST}" "${ssh_port}" "${DEPLOY_HOST_KEY}" > "${chatbot_ssh_dir}/known_hosts"
+          fi
+          ssh-keygen -l -f "${chatbot_ssh_dir}/known_hosts" > /dev/null
+
+          # Match the initial deployed corpus, even though this workflow is on an ops branch.
+          git diff --quiet "${PDF_SOURCE_SHA}" HEAD -- documents
+          python - "${chatbot_ssh_dir}/documents.tar.gz" <<'PYTHON'
+          from pathlib import Path
+          import hashlib
+          import io
+          import subprocess
+          import sys
+          import tarfile
+
+          tracked = subprocess.check_output(["git", "ls-files", "-z", "documents"]).decode().split("\0")
+          files = sorted(Path(name) for name in tracked if name.endswith(".pdf"))
+          text_files = [p for p in files if p.parent == Path("documents/text_pdf")]
+          image_files = [p for p in files if p.parent == Path("documents/image_pdf")]
+          assert len(text_files) == 371 and len(image_files) == 2 and len(files) == 373
+          manifest = []
+          with tarfile.open(sys.argv[1], "w:gz") as archive:
+              for path in files:
+                  relative = path.relative_to("documents").as_posix()
+                  assert "\n" not in relative and "\r" not in relative and "\\" not in relative
+                  data = path.read_bytes()
+                  assert data.startswith(b"%PDF-"), f"Not a PDF: {relative}"
+                  manifest.append(f"{hashlib.sha256(data).hexdigest()}  {relative}\n")
+                  info = tarfile.TarInfo(relative)
+                  info.size = len(data)
+                  info.mode = 0o644
+                  archive.addfile(info, io.BytesIO(data))
+              data = "".join(manifest).encode()
+              info = tarfile.TarInfo("SHA256SUMS")
+              info.size = len(data)
+              info.mode = 0o644
+              archive.addfile(info, io.BytesIO(data))
+          print(f"Prepared {len(text_files)} text PDFs and {len(image_files)} image PDFs.")
+          PYTHON
+
+          ssh_options=(
+            -i "${chatbot_ssh_dir}/id_ed25519"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o HostKeyAlgorithms=ssh-ed25519
+            -o "UserKnownHostsFile=${chatbot_ssh_dir}/known_hosts"
+            -o GlobalKnownHostsFile=/dev/null
+            -o ConnectTimeout=15
+          )
+          destination="${DEPLOY_USER}@${DEPLOY_HOST}"
+          incoming="/opt/chatbot-service/imports/staging/${PDF_SOURCE_SHA}"
+          ssh "${ssh_options[@]}" -p "${ssh_port}" "${destination}" \
+            "test \"\$(cat /opt/chatbot-service/staging/.current-image)\" = '${PDF_SOURCE_SHA}' && umask 077 && mkdir -p '${incoming}'"
+          scp "${ssh_options[@]}" -P "${ssh_port}" "${chatbot_ssh_dir}/documents.tar.gz" \
+            "${destination}:${incoming}/documents.tar.gz"
+          ssh "${ssh_options[@]}" -p "${ssh_port}" "${destination}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          source_sha=f3923681f14f0ed7292f98607e05630b3b5de9a4
+          incoming="/opt/chatbot-service/imports/staging/${source_sha}"
+          documents=/opt/chatbot-service/storage/staging/documents
+          api=chatbot-staging-api-1
+          actual_image="$(docker inspect --format '{{.Config.Image}}' "${api}")"
+          test "${actual_image}" = "ghcr.io/konkuk-icteam-student/ai:${source_sha}"
+          tar --no-same-owner -xzf "${incoming}/documents.tar.gz" -C "${incoming}"
+          (cd "${incoming}"; sha256sum --quiet -c SHA256SUMS)
+          existing_count="$(find "${documents}" -type f -name '*.pdf' | wc -l)"
+          if (( existing_count == 0 )); then
+            cp -r "${incoming}/text_pdf/." "${documents}/text_pdf/"
+            cp -r "${incoming}/image_pdf/." "${documents}/image_pdf/"
+          else
+            # Validate instead of replacing a pre-existing corpus.
+            (cd "${documents}"; sha256sum --quiet -c "${incoming}/SHA256SUMS")
+          fi
+          test "$(find "${documents}" -type f -name '*.pdf' | wc -l)" -eq 373
+          chmod 755 "${documents}" "${documents}/text_pdf" "${documents}/image_pdf"
+          find "${documents}" -type f -name '*.pdf' -exec chmod 644 {} +
+          if command -v getenforce >/dev/null && [[ "$(getenforce)" != Disabled ]]; then
+            chcon -R --reference="${documents}" "${documents}/text_pdf" "${documents}/image_pdf"
+          fi
+          (cd "${documents}"; sha256sum --quiet -c "${incoming}/SHA256SUMS")
+          docker exec -i "${api}" python - <<'PYTHON'
+          from pathlib import Path
+          import importlib.metadata
+          for directory, expected in [("text_pdf", 371), ("image_pdf", 2)]:
+              files = list((Path("/app/documents") / directory).glob("*.pdf"))
+              assert len(files) == expected, (directory, len(files))
+              for path in files:
+                  with path.open("rb") as handle:
+                      assert handle.read(5) == b"%PDF-", path.name
+              print(f"Container readable PDFs: {directory}={len(files)}")
+          for package in ["pymupdf", "paddleocr", "paddlepaddle", "torch"]:
+              print(f"Runtime dependency: {package}={importlib.metadata.version(package)}")
+          PYTHON
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:18000/health
+          echo
+          echo 'PDF checksums and container readability verified. Ingestion was not run.'
+          REMOTE
