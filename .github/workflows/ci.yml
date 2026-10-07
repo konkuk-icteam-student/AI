@@ -37,6 +37,11 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m compileall -q app tests
+      - name: Check deployment shell syntax
+        run: |
+          for script in deploy/scripts/*.sh; do
+            bash -n "$script"
+          done
 
   unit-tests:
     name: Unit tests
