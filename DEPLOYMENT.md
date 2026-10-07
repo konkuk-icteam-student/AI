@@ -28,6 +28,8 @@
 
 DB는 환경별 `pgvector/pgvector:pg17` named volume을 사용한다. 기존 CommuteMate DB와는 별개다. API와 DB를 외부 공개하지 않으며 같은 서버에서 실행되는 Spring은 운영 AI를 `http://127.0.0.1:8000`으로 연결할 수 있다. 실제 Spring 실행 네트워크와 `RAG_SERVICE_URL`은 운영 전 확인한다. 다른 서버나 bridge 네트워크의 컨테이너에서 사용할 경우 해당 클라이언트의 localhost는 AI 서버를 의미하지 않는다.
 
+API는 `app` 사용자로 실행하며 passwd의 홈과 `HOME`을 `/home/app`으로 맞춘다. Hugging Face 캐시는 `model-cache`, PaddleX OCR 모델 캐시는 `ocr-cache` 볼륨으로 환경별 보관한다. 모델 초기 로딩과 OCR은 `/health` 검사에 포함되지 않으므로 최초 색인 전에 실제 추출을 검증한다.
+
 ## 3. GitHub 설정
 
 Repository secrets:
