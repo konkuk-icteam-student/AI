@@ -1,0 +1,83 @@
+name: Index initial staging corpus
+
+on:
+  push:
+    branches: [ops/staging-pdfs]
+    paths:
+      - .github/workflows/index-staging.yml
+      - deploy/scripts/initial-index-staging.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize with the whole staging deployment workflow, including its build job.
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  index:
+    name: Guard, back up and index the empty staging database
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute the initial-load procedure on the deployed image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for variable in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_HOST_KEY; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Missing repository secret: ${variable}" >&2
+              exit 1
+            fi
+          done
+
+          ssh_port="${DEPLOY_PORT:-22}"
+          if [[ ! "${DEPLOY_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+              || [[ ! "${DEPLOY_USER}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
+              || [[ ! "${ssh_port}" =~ ^[0-9]{1,5}$ ]] \
+              || (( 10#${ssh_port} < 1 || 10#${ssh_port} > 65535 )); then
+            echo "Invalid deployment host, user, or port." >&2
+            exit 1
+          fi
+          ssh_port="$((10#${ssh_port}))"
+
+          umask 077
+          chatbot_ssh_dir="$(mktemp -d "${RUNNER_TEMP}/chatbot-ssh.XXXXXX")"
+          trap 'rm -f "${chatbot_ssh_dir}/id_ed25519" "${chatbot_ssh_dir}/known_hosts"; rmdir "${chatbot_ssh_dir}"' EXIT
+
+          printf '%s\n' "${DEPLOY_SSH_PRIVATE_KEY}" > "${chatbot_ssh_dir}/id_ed25519"
+          chmod 600 "${chatbot_ssh_dir}/id_ed25519"
+          ssh-keygen -y -P '' -f "${chatbot_ssh_dir}/id_ed25519" > /dev/null
+
+          if (( 10#${ssh_port} == 22 )); then
+            printf '%s %s\n' "${DEPLOY_HOST}" "${DEPLOY_HOST_KEY}" > "${chatbot_ssh_dir}/known_hosts"
+          else
+            printf '[%s]:%s %s\n' "${DEPLOY_HOST}" "${ssh_port}" "${DEPLOY_HOST_KEY}" > "${chatbot_ssh_dir}/known_hosts"
+          fi
+          ssh-keygen -l -f "${chatbot_ssh_dir}/known_hosts" > /dev/null
+
+          ssh \
+            -p "${ssh_port}" \
+            -i "${chatbot_ssh_dir}/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o HostKeyAlgorithms=ssh-ed25519 \
+            -o "UserKnownHostsFile=${chatbot_ssh_dir}/known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=6 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s -- 5b8aa1467d255370852c9a1c708c58af8b406596 f3923681f14f0ed7292f98607e05630b3b5de9a4' \
+            < deploy/scripts/initial-index-staging.sh
