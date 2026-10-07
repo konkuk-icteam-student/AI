@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - ci/verify-ssh
+      - ci/ssh-deploy
     paths:
       - .github/workflows/verify-ssh.yml
   workflow_dispatch:
@@ -13,7 +14,7 @@ permissions:
 
 jobs:
   verify:
-    name: Verify server identity and Docker access
+    name: Verify server and deployment prerequisites
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -78,4 +79,9 @@ jobs:
           docker --version
           docker compose version
           docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+          test -w /opt/chatbot-service
+          echo 'Deployment directory is writable.'
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:11434/api/tags > /dev/null
+          OLLAMA_HOST=http://127.0.0.1:11434 ollama list
+          ss -lnt
           REMOTE

@@ -74,7 +74,11 @@ uvicorn app.main:app --port 8000
 
 스키마(`vector` 확장, 테이블, HNSW/GIN 인덱스)는 서버 시작 또는 ingest 시 자동 생성된다 (`app/infrastructure/database.py`의 `init_schema`).
 
-## 원격 서버 배포 (RAG+LLM 분리 구성)
+## 운영 배포 구성: SSH와 기존 서버 Ollama
+
+현재 배포 대상은 CommuteMate와 같은 `203.252.168.90` 서버다. GitHub-hosted runner에서 SSH로 접속해 API와 환경별 AI 전용 DB를 배포하고 호스트의 기존 Ollama를 사용한다. API는 staging `127.0.0.1:18000`, production `127.0.0.1:8000`에서 동작하도록 구성했다. 서버 준비·Secrets·데이터 갱신·복구 절차는 [DEPLOYMENT.md](DEPLOYMENT.md)를 따른다. 아래 `.117`의 venv 실행 방식은 이전 분리 구성의 참고 절차다.
+
+## 이전 원격 서버 배포 (RAG+LLM 분리 구성)
 
 RAG+Ollama+청크DB를 원격 서버에, Spring/프론트/Spring용 DB를 로컬에 두는 구성.
 Spring과는 `faq_id`로만 연결되므로 청크 DB는 원격 서버에만 있으면 된다.

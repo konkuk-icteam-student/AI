@@ -48,19 +48,25 @@ jobs:
   deploy:
     name: Deploy to staging server
     needs: build
-    runs-on: [self-hosted, linux, chatbot-deploy]
+    runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Deploy and verify
+      - name: Deploy over SSH and verify
         env:
           DEPLOY_ROOT: ${{ vars.STAGING_DEPLOY_ROOT || '/opt/chatbot-service' }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_REPOSITORY: ${{ needs.build.outputs.image_repository }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
         run: >-
-          bash deploy/scripts/deploy.sh staging
-          "${{ needs.build.outputs.image_repository }}"
-          "${{ needs.build.outputs.image_tag }}"
+          bash deploy/scripts/deploy-ssh.sh staging
+          "$IMAGE_REPOSITORY" "$IMAGE_TAG"
