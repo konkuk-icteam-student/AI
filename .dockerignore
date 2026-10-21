@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.venv
+__pycache__
+*.pyc
+*.log
+.env
+data
+documents
+storage
+tests
+TEST_MANUAL.md

@@ -4,6 +4,19 @@
 
 건국대학교 규정 기반 RAG 챗봇을 CommuteMate 챗봇 도입 제안서에 맞게 확장한 버전.
 
+로컬·IntelliJ 테스트 절차는 [`TEST_MANUAL.md`](TEST_MANUAL.md)를 참고한다.
+
+GitHub Actions, `develop -> main` 배포 흐름과 팀 서버 설정은 [`DEPLOYMENT.md`](DEPLOYMENT.md)를 참고한다.
+
+## 브랜치·배포 흐름
+
+```text
+feature/*, fix/*, jonghwa -> PR develop -> CI -> staging
+develop -> PR main -> CI -> production
+```
+
+`develop`과 `main`에는 직접 push하지 않는다. `develop` merge는 staging, `main` merge는 production 자동 배포를 시작한다.
+
 ## 구조
 
 - **저장소**: Postgres + pgvector (CommuteMate와 동일 인스턴스 공유, `regulation_chunks` / `faq_chunks`)
@@ -11,6 +24,19 @@
 - **검색**: 소스별 독립 하이브리드 — 벡터(코사인) + 키워드(`to_tsvector`) → RRF(k=60) → `BAAI/bge-reranker-v2-m3` 재정렬
 - **LLM**: Ollama `qwen3:8b` (think 비활성화)
 - **챗봇 게이트**: 규정·FAQ 둘 다 근거 0건일 때만 LLM 미호출("관련 규정을 찾을 수 없습니다"). FAQ만 있으면 "규정 근거 없음"을 명시하고 답변. 규정과 FAQ 충돌 시 `CONFLICT` 마커로 감지.
+
+### 관리자가 수정할 수 있는 파일
+
+- 채팅 답변 프롬프트: `resources/prompts/chat_answer.txt`
+- 규정 검색 확장 규칙: `resources/search/query_expansions.json`
+
+두 파일은 요청할 때마다 다시 읽으므로 서버를 재시작하지 않아도 변경이 반영된다. 프롬프트의 `{{QUESTION}}`, `{{REGULATION_CONTEXT}}`, `{{FAQ_CONTEXT}}`, `{{FAQ_ONLY_NOTICE}}` 표시자는 삭제하지 말아야 한다.
+
+### 규정 청킹
+
+규정 PDF는 `제1조`, `제1조의2`, `제 1 조` 형식의 조문 머리를 기준으로 청킹한다. 하나의 조문이 여러 페이지로 이어지면 하나의 청크로 유지한다. 조문 표식이 없는 문서는 기존 900자 방식으로 처리한다.
+
+기존 DB에는 이전 900자 청크가 들어 있으므로, 조문 청킹을 적용하려면 배포 후 규정 인제스트를 다시 실행해야 한다.
 
 ## API
 
@@ -40,15 +66,19 @@ export DATABASE_URL="postgresql://<user>:<password>@localhost:5432/<db>"
 export OLLAMA_BASE_URL="http://localhost:11434"
 
 # 4. 규정 PDF 인덱싱 (documents/ 폴더의 PDF → regulation_chunks)
-python -m app.ingest
+python -m app.ingestion.service
 
 # 5. 서버 실행
-uvicorn app.api:app --port 8000
+uvicorn app.main:app --port 8000
 ```
 
-스키마(`vector` 확장, 테이블, HNSW/GIN 인덱스)는 서버 시작 또는 ingest 시 자동 생성된다 (`app/db.py`의 `init_schema`).
+스키마(`vector` 확장, 테이블, HNSW/GIN 인덱스)는 서버 시작 또는 ingest 시 자동 생성된다 (`app/infrastructure/database.py`의 `init_schema`).
 
-## 원격 서버 배포 (RAG+LLM 분리 구성)
+## 운영 배포 구성: SSH와 기존 서버 Ollama
+
+현재 배포 대상은 CommuteMate와 같은 `203.252.168.90` 서버다. GitHub-hosted runner에서 SSH로 접속해 API와 환경별 AI 전용 DB를 배포하고 호스트의 기존 Ollama를 사용한다. API는 staging `127.0.0.1:18000`, production `127.0.0.1:8000`에서 동작하도록 구성했다. 서버 준비·Secrets·데이터 갱신·복구 절차는 [DEPLOYMENT.md](DEPLOYMENT.md)를 따른다. 아래 `.117`의 venv 실행 방식은 이전 분리 구성의 참고 절차다.
+
+## 이전 원격 서버 배포 (RAG+LLM 분리 구성)
 
 RAG+Ollama+청크DB를 원격 서버에, Spring/프론트/Spring용 DB를 로컬에 두는 구성.
 Spring과는 `faq_id`로만 연결되므로 청크 DB는 원격 서버에만 있으면 된다.

@@ -1,0 +1,43 @@
+name: Sync main to develop
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-sync-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open a synchronization pull request when needed
+        env:
+          GH_TOKEN: ${{ secrets.PR_AUTOMATION_TOKEN }}
+        shell: bash
+        run: |
+          existing_pr="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base develop \
+            --head main \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [ -n "$existing_pr" ]; then
+            echo "Sync PR already exists: #${existing_pr}"
+            exit 0
+          fi
+
+          if gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base develop \
+            --head main \
+            --title "chore: sync main back to develop" \
+            --body "운영 배포 이후 main의 변경 사항을 develop에 되돌려 반영합니다."; then
+            echo "Created main to develop sync PR."
+          else
+            echo "No synchronization PR was necessary."
+          fi

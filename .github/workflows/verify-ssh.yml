@@ -1,0 +1,87 @@
+name: Verify SSH access
+
+on:
+  push:
+    branches:
+      - ci/verify-ssh
+      - ci/ssh-deploy
+    paths:
+      - .github/workflows/verify-ssh.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify server and deployment prerequisites
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+    steps:
+      - name: Connect with the deployment key and inspect Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for variable in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_HOST_KEY; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Missing repository secret: ${variable}" >&2
+              exit 1
+            fi
+          done
+
+          ssh_port="${DEPLOY_PORT:-22}"
+          if [[ ! "${DEPLOY_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+              || [[ ! "${DEPLOY_USER}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
+              || [[ ! "${ssh_port}" =~ ^[0-9]{1,5}$ ]] \
+              || (( 10#${ssh_port} < 1 || 10#${ssh_port} > 65535 )); then
+            echo "Invalid deployment host, user, or port." >&2
+            exit 1
+          fi
+          ssh_port="$((10#${ssh_port}))"
+
+          umask 077
+          chatbot_ssh_dir="$(mktemp -d "${RUNNER_TEMP}/chatbot-ssh.XXXXXX")"
+          trap 'rm -f "${chatbot_ssh_dir}/id_ed25519" "${chatbot_ssh_dir}/known_hosts"; rmdir "${chatbot_ssh_dir}"' EXIT
+
+          printf '%s\n' "${DEPLOY_SSH_PRIVATE_KEY}" > "${chatbot_ssh_dir}/id_ed25519"
+          chmod 600 "${chatbot_ssh_dir}/id_ed25519"
+          ssh-keygen -y -P '' -f "${chatbot_ssh_dir}/id_ed25519" > /dev/null
+
+          if (( 10#${ssh_port} == 22 )); then
+            printf '%s %s\n' "${DEPLOY_HOST}" "${DEPLOY_HOST_KEY}" > "${chatbot_ssh_dir}/known_hosts"
+          else
+            printf '[%s]:%s %s\n' "${DEPLOY_HOST}" "${ssh_port}" "${DEPLOY_HOST_KEY}" > "${chatbot_ssh_dir}/known_hosts"
+          fi
+          ssh-keygen -l -f "${chatbot_ssh_dir}/known_hosts" > /dev/null
+
+          ssh \
+            -p "${ssh_port}" \
+            -i "${chatbot_ssh_dir}/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o HostKeyAlgorithms=ssh-ed25519 \
+            -o "UserKnownHostsFile=${chatbot_ssh_dir}/known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o ConnectTimeout=15 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          hostname
+          whoami
+          id
+          docker --version
+          docker compose version
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+          test -w /opt/chatbot-service
+          echo 'Deployment directory is writable.'
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:11434/api/tags > /dev/null
+          OLLAMA_HOST=http://127.0.0.1:11434 ollama list
+          ss -lnt
+          REMOTE

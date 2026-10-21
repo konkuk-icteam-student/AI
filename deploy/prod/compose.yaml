@@ -1,0 +1,34 @@
+name: chatbot-production
+
+services:
+  api:
+    image: "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}:${IMAGE_TAG:?IMAGE_TAG is required}"
+    restart: unless-stopped
+    # Set DATABASE_URL in .env to connect to the backend PostgreSQL server.
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "${API_BIND_ADDRESS:-127.0.0.1}"
+      - --port
+      - "${API_PORT:-8000}"
+    volumes:
+      - "${DOCUMENTS_PATH:-../../storage/prod/documents}:/app/documents:ro,Z"
+      - "${PROMPTS_PATH:-../../resources/prompts}:/app/resources/prompts:ro,Z"
+      - "${SEARCH_CONFIG_PATH:-../../resources/search}:/app/resources/search:ro,Z"
+      - model-cache:/home/app/.cache/huggingface
+      - ocr-cache:/home/app/.paddlex
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  model-cache:
+  ocr-cache:
