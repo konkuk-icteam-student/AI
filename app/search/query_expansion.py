@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_RULES_PATH = (
     Path(__file__).resolve().parents[2]
     / "resources"
@@ -38,15 +37,29 @@ def load_query_expansion_rules(
         expansions = rule.get("expansions")
         if (
             not isinstance(keywords, list)
+            or not keywords
             or not all(isinstance(value, str) and value.strip() for value in keywords)
             or not isinstance(expansions, list)
+            or not expansions
             or not all(isinstance(value, str) and value.strip() for value in expansions)
         ):
             raise RuntimeError(
                 f"검색 확장 {index}번 규칙의 keywords와 expansions는 "
                 "비어 있지 않은 문자열 목록이어야 합니다."
             )
-        rules.append(rule)
+        match_mode = rule.get("match", "any")
+        if not isinstance(match_mode, str) or match_mode.lower() not in {"any", "all"}:
+            raise RuntimeError(
+                f"검색 확장 {index}번 규칙의 match는 any 또는 all이어야 합니다."
+            )
+        rules.append(
+            {
+                **rule,
+                "keywords": [value.strip() for value in keywords],
+                "expansions": [value.strip() for value in expansions],
+                "match": match_mode.lower(),
+            }
+        )
     return rules
 
 
@@ -62,7 +75,9 @@ def expand_regulation_query(
     for rule in load_query_expansion_rules(path):
         match_mode = str(rule.get("match", "any")).lower()
         matched_keywords = [keyword in cleaned_query for keyword in rule["keywords"]]
-        matched = all(matched_keywords) if match_mode == "all" else any(matched_keywords)
+        matched = (
+            all(matched_keywords) if match_mode == "all" else any(matched_keywords)
+        )
         if matched:
             queries.extend(str(value).strip() for value in rule["expansions"])
 

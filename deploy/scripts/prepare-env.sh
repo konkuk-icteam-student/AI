@@ -4,8 +4,8 @@ set -euo pipefail
 environment="${1:?usage: prepare-env.sh <staging|prod>}"
 deploy_root="${DEPLOY_ROOT:-/opt/chatbot-service}"
 case "${environment}" in
-    staging) api_port=18000; postgres_port=15433 ;;
-    prod) api_port=8000; postgres_port=25433 ;;
+    staging) api_port=18000 ;;
+    prod) api_port=8000 ;;
     *) echo "environment must be staging or prod" >&2; exit 1 ;;
 esac
 
@@ -26,22 +26,19 @@ if [[ -e "${env_file}" ]]; then
     exit 0
 fi
 
-postgres_password="$(openssl rand -hex 32)"
 # A noclobber subshell also protects against another preparation process.
 (
     set -o noclobber
     cat > "${env_file}" <<EOF
-POSTGRES_DB=chatbot
-POSTGRES_PASSWORD=${postgres_password}
-POSTGRES_PORT=${postgres_port}
+DATABASE_URL=
 API_BIND_ADDRESS=127.0.0.1
 API_PORT=${api_port}
-OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_BASE_URL=
 EMBEDDING_MODEL=qwen3-embedding:0.6b
 LLM_MODEL=qwen3:8b
 EOF
 )
 chmod 600 "${env_file}"
-unset postgres_password
 echo "Environment prepared: ${env_file}"
-echo "Loopback API port: ${api_port}; loopback database port: ${postgres_port}"
+echo "Set DATABASE_URL and a container-reachable OLLAMA_BASE_URL before deployment."
+echo "Configured API port: ${api_port}"
