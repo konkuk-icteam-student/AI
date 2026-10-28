@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import unittest
 
-
 REPOSITORY = Path(__file__).resolve().parents[2]
 NEW_TAG = "a" * 40
 OLD_TAG = "b" * 40
@@ -82,9 +81,15 @@ done
     def prepare(self):
         result = self.run_script("prepare-env.sh", "staging")
         self.assertEqual(result.returncode, 0, result.stderr)
-        return self.runtime / "staging"
+        runtime = self.runtime / "staging"
+        with (runtime / ".env").open("a") as env_file:
+            env_file.write(
+                "\nDATABASE_URL='postgresql://test:secret@chatbot-db:5432/chatbot'\n"
+            )
+            env_file.write("OLLAMA_BASE_URL=http://127.0.0.1:11434\n")
+        return runtime
 
-    def test_preparation_protects_password_and_existing_environment(self):
+    def test_preparation_preserves_external_database_configuration(self):
         runtime = self.prepare()
         env_file = runtime / ".env"
         before = env_file.read_text()
@@ -92,12 +97,21 @@ done
         documents = self.runtime / "storage/staging/documents"
         for folder in (documents, documents / "text_pdf", documents / "image_pdf"):
             self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o755)
-        password = next(line.split("=", 1)[1] for line in before.splitlines() if line.startswith("POSTGRES_PASSWORD="))
-        self.assertEqual(len(password), 64)
+        self.assertNotIn("POSTGRES_PASSWORD=", before)
+        self.assertNotIn("POSTGRES_PORT=", before)
         result = self.run_script("prepare-env.sh", "staging")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(env_file.read_text(), before)
-        self.assertNotIn(password, result.stdout)
+        self.assertNotIn("test:secret", result.stdout)
+
+    def test_unconfigured_external_database_stops_before_container_operations(self):
+        self.prepare()
+        with (self.runtime / "staging/.env").open("a") as env_file:
+            env_file.write("DATABASE_URL=\n")
+        result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("DATABASE_URL", result.stderr)
+        self.assertFalse(self.log.exists())
 
     def test_success_records_verified_image_and_readable_configuration(self):
         runtime = self.prepare()
@@ -137,24 +151,36 @@ done
         self.env["MOCK_FAIL_UP_TAG"] = NEW_TAG
         token = "temporary-registry-token-for-test"
         result = subprocess.run(
-            ["bash", str(self.source / "deploy/scripts/deploy-remote.sh"),
-             "staging", IMAGE, NEW_TAG, str(self.runtime), "test-user"],
-            input=token + "\n", env=self.env, text=True,
-            capture_output=True, timeout=10,
+            [
+                "bash",
+                str(self.source / "deploy/scripts/deploy-remote.sh"),
+                "staging",
+                IMAGE,
+                NEW_TAG,
+                str(self.runtime),
+                "test-user",
+            ],
+            input=token + "\n",
+            env=self.env,
+            text=True,
+            capture_output=True,
+            timeout=10,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(self.runtime.glob(".registry-auth.*")), [])
         self.assertNotIn(token, result.stdout + result.stderr)
 
     def test_ssh_arguments_reject_shell_injection_before_using_credentials(self):
-        self.env.update({
-            "DEPLOY_HOST": "203.252.168.90;touch /tmp/injected",
-            "DEPLOY_USER": "kuai",
-            "DEPLOY_SSH_PRIVATE_KEY": "not-used",
-            "DEPLOY_HOST_KEY": "not-used",
-            "GHCR_USER": "test-user",
-            "GHCR_TOKEN": "not-used",
-        })
+        self.env.update(
+            {
+                "DEPLOY_HOST": "203.252.168.90;touch /tmp/injected",
+                "DEPLOY_USER": "kuai",
+                "DEPLOY_SSH_PRIVATE_KEY": "not-used",
+                "DEPLOY_HOST_KEY": "not-used",
+                "GHCR_USER": "test-user",
+                "GHCR_TOKEN": "not-used",
+            }
+        )
         result = self.run_script("deploy-ssh.sh", "staging", IMAGE, NEW_TAG)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Invalid deployment", result.stderr)

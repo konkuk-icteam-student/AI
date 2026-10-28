@@ -17,18 +17,31 @@
 
 `main` 대상 PR의 출발 브랜치는 `develop`으로 제한한다. branch ruleset에 PR·리뷰·필수 CI·force push 제한을 적용해야 실제 병합 정책이 강제된다. CI에는 브랜치 정책, Python/셸 문법, 단위 테스트, staging/prod Compose 설정 검사가 있다.
 
-## 2. 같은 서버의 Ollama와 AI 전용 DB
+## 2. 현재 컨테이너·DB 구성
 
-서버의 기존 Ollama는 `127.0.0.1:11434`에서 실행되고 `qwen3-embedding:0.6b`, `qwen3:8b`가 설치돼 있다. API 컨테이너는 Linux의 host networking을 사용해 이 Ollama와 루프백 DB에 접근한다. Ollama 설치·모델 파일·서비스 설정은 이 배포가 변경하지 않는다. 실제 GPU 사용과 응답 시간은 질의로 검증한다.
+`deploy/staging/compose.yaml`과 `deploy/prod/compose.yaml`에는 API 서비스만 있다. `network_mode`를 생략하므로 각 Compose 프로젝트의 기본 bridge 네트워크를 사용한다. PostgreSQL은 이 Compose가 생성·관리하지 않는다. 챗봇 전용 외부 PostgreSQL/pgvector DB에 `DATABASE_URL`로 연결하며 업무일지 DB로 데이터를 이전하지 않는다.
 
-| 환경 | Compose 프로젝트 | API 주소 | AI 전용 DB 주소 |
-|---|---|---|---|
-| staging | chatbot-staging | 127.0.0.1:18000 | 127.0.0.1:15433 |
-| production (`prod`) | chatbot-production | 127.0.0.1:8000 | 127.0.0.1:25433 |
+| 환경 | Compose 프로젝트 | API 컨테이너 포트 기본값 |
+|---|---|---|
+| staging | chatbot-staging | 18000 |
+| production (`prod`) | chatbot-production | 8000 |
 
-DB는 환경별 `pgvector/pgvector:pg17` named volume을 사용한다. 기존 CommuteMate DB와는 별개다. API와 DB를 외부 공개하지 않으며 같은 서버에서 실행되는 Spring은 운영 AI를 `http://127.0.0.1:8000`으로 연결할 수 있다. 실제 Spring 실행 네트워크와 `RAG_SERVICE_URL`은 운영 전 확인한다. 다른 서버나 bridge 네트워크의 컨테이너에서 사용할 경우 해당 클라이언트의 localhost는 AI 서버를 의미하지 않는다.
+서버 `.env`에는 다음 값을 직접 설정한다. URL에 들어가는 비밀번호의 특수문자는 URL 인코딩하고, 셸로 읽을 때 값이 변하지 않도록 전체 URL을 작은따옴표로 감싼다.
 
-API는 `app` 사용자로 실행하며 passwd의 홈과 `HOME`을 `/home/app`으로 맞춘다. Hugging Face 캐시는 `model-cache`, PaddleX OCR 모델 캐시는 `ocr-cache` 볼륨으로 환경별 보관한다. 모델 초기 로딩과 OCR은 `/health` 검사에 포함되지 않으므로 최초 색인 전에 실제 추출을 검증한다.
+```dotenv
+DATABASE_URL='postgresql://USER:URL_ENCODED_PASSWORD@CHATBOT_DB_HOST:5432/chatbot'
+OLLAMA_BASE_URL='http://HOST_REACHABLE_FROM_API:11434'
+```
+
+이 값들은 예시 자리표시자다. 실제 주소는 서버의 네트워크에서 확인한다. bridge 컨테이너 내부의 `127.0.0.1`은 해당 컨테이너이므로 호스트 Ollama 주소로 사용할 수 없다. Ollama 설치·모델·서버 설정은 일반 코드 배포가 변경하지 않는다.
+
+현재 남은 네트워크 배포 과제:
+
+- Compose의 기본 API 바인딩과 배포 검사는 아직 `127.0.0.1` 기준이다. 다른 컨테이너에서 접근하려면 수신 바인딩·공통 네트워크·alias를 함께 정비해야 한다.
+- 배포 스크립트의 host-side `/health` 검사도 현재 bridge 구성에 맞게 바꿔야 한다. 코드에 없는 수동 네트워크 연결은 재배포 시 보존되지 않을 수 있다.
+- staging과 production의 네트워크 이름과 DB 연결은 실제 서버에서 각각 확인한다. 이 문서나 단위 테스트 통과만으로 운영 연결이 검증된 것은 아니다.
+
+API는 `app` 사용자로 실행한다. 문서는 읽기 전용 마운트, Hugging Face 캐시는 `model-cache`, PaddleX OCR 캐시는 `ocr-cache` 볼륨으로 보관한다. 기존 마운트와 챗봇 DB 네트워크를 보존해야 한다. 모델 초기 로딩과 OCR은 `/health` 검사에 포함되지 않는다.
 
 ## 3. GitHub 설정
 
@@ -41,6 +54,7 @@ Repository secrets:
 | DEPLOY_USER | 배포 사용자, 현재 kuai |
 | DEPLOY_SSH_PRIVATE_KEY | 암호 없는 배포 개인키 전체 |
 | DEPLOY_HOST_KEY | 서버 ED25519 공개키 한 줄, `ssh-ed25519 AAAA...`; IP나 fingerprint 제외 |
+| PR_AUTOMATION_TOKEN | 규정 갱신·main→develop 동기화 PR 생성용 토큰. AI 저장소의 Contents 및 Pull requests 읽기·쓰기 권한 필요 |
 
 실행 시 알려진 서버 키와 엄격히 대조한다. `ssh-keyscan` 결과를 자동 신뢰하거나 host key 검사를 끄지 않는다. 현재 검증한 ED25519 fingerprint는 `SHA256:ABhropRIcPrirvVJcwgf/kTHeS2jLfMkaLwgsM0D4yg`다.
 
@@ -53,7 +67,21 @@ Environments:
 
 이미지 빌드는 `packages: write`, SSH 배포 job은 `packages: read`를 사용한다. 해당 실행의 `GITHUB_TOKEN`을 암호화된 SSH stdin으로 전달해 서버 GHCR에 로그인한다. 인증 파일은 서버 임시 디렉터리에만 만들고 배포 종료 시 삭제한다. DB 비밀번호는 서버 `.env`에만 보관한다.
 
-규정 업데이트·main→develop 동기화 PR에는 기존 `PR_AUTOMATION_TOKEN` 설정이 필요하다. 현재 main의 예약 작업과 develop의 PR 방식이 다른 경우, main 반영 시 보호 규칙과 토큰 권한을 함께 정리한다.
+### 규정 자동 갱신의 인증 토큰 누락 해결
+
+`update-regulations.yml`은 checkout, 변경 브랜치 push, PR 생성에 `PR_AUTOMATION_TOKEN`을 사용한다. 이 Secret을 사용할 수 없으면 checkout에서 `Input required and not supplied: token` 오류로 종료하며 PDF 수집도 시작되지 않는다. `sync-main-to-develop.yml`도 같은 Secret을 사용한다.
+
+현재 workflow를 유지하는 최소 변경안은 다음과 같다.
+
+1. GitHub 개인 설정의 Developer settings → Personal access tokens → Fine-grained tokens에서 토큰을 생성한다.
+2. Resource owner를 `konkuk-icteam-student`, Repository access를 `Only select repositories` → `AI`로 지정한다. Repository permissions는 `Contents: Read and write`, `Pull requests: Read and write`로 제한한다. 만료일을 지정하고 조직 승인이 필요한 경우 승인을 완료한다. 토큰 소유자도 해당 저장소에 필요한 권한이 있어야 한다.
+3. AI 저장소의 Settings → Secrets and variables → Actions → New repository secret에서 이름을 정확히 `PR_AUTOMATION_TOKEN`으로 지정하고 토큰을 등록한다. 이 갱신 job은 Environment를 지정하지 않으므로 staging/production Environment에만 등록한 Secret은 사용하지 못한다. 토큰 값은 코드·문서·대화·로그에 남기지 않는다.
+4. Actions → Update Regulation PDFs → Run workflow에서 `main`을 선택해 검증한다. 파일 변경이 없으면 PR을 만들지 않고 종료하는 것이 정상이다. 변경이 있으면 갱신 브랜치 push, develop 대상 PR 생성, 해당 PR의 CI 실행까지 확인한다.
+5. 이후 예약 실행도 확인하고, 토큰 만료 또는 담당자 권한 변경 시 Secret을 교체한다. 규정 PDF 갱신 성공과 서버 RAG 인덱스 반영은 별도로 검증한다.
+
+`GITHUB_TOKEN`으로 단순 대체하면 인증 관리가 간단해지지만, 그 토큰으로 생성·갱신한 PR의 CI는 승인 대기 상태가 될 수 있다. 현재 자동 PR 흐름을 유지하려면 위 PAT 방식이 최소 변경안이다. 장기 팀 운영에는 AI 저장소에만 설치한 GitHub App이 적합하다. 이 경우 App 자격 증명을 등록하고 workflow에서 실행별 installation token을 발급받도록 변경해야 하며, 단기 installation token을 고정 Secret으로 저장하지 않는다.
+
+공식 참고: [토큰 생성과 권한 범위](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens), [GITHUB_TOKEN의 workflow 실행 규칙](https://docs.github.com/en/actions/concepts/security/github_token), [GitHub App의 Actions 인증](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/making-authenticated-api-requests-with-a-github-app-in-a-github-actions-workflow).
 
 ## 4. 최초 서버 준비
 
@@ -72,7 +100,7 @@ bash deploy/scripts/prepare-env.sh staging
 
 `Prepare staging environment` Actions도 동일한 스크립트를 SSH stdin으로 전달해 staging 환경을 준비한다. 컨테이너를 시작하지 않으며 설정 내용은 로그로 출력하지 않는다.
 
-이 스크립트는 64자리 랜덤 hex DB 비밀번호를 생성해 `.env`를 600 권한으로 저장한다. 비밀번호를 출력하지 않으며 기존 `.env`는 덮어쓰지 않는다. 읽기 전용으로 마운트할 문서 폴더도 미리 만들고 컨테이너 사용자가 읽을 수 있게 준비한다.
+이 스크립트는 `.env`를 600 권한으로 생성하고 기존 파일은 덮어쓰지 않는다. 새 파일의 `DATABASE_URL`과 `OLLAMA_BASE_URL`은 비어 있으므로 관리자가 실제 값을 설정해야 한다. DB 계정이나 비밀번호를 새로 만들지 않으며 문서 폴더만 미리 준비한다.
 
 ```text
 /opt/chatbot-service/staging/.env
@@ -80,7 +108,7 @@ bash deploy/scripts/prepare-env.sh staging
 /opt/chatbot-service/storage/staging/documents/image_pdf/
 ```
 
-API·AI DB 포트가 다른 프로세스에 사용 중인지 확인한다. 현재 API 호스트 모드에 대해 컨테이너 port mapping을 추가하면 안 된다. Ollama API에 연결되고 지정한 두 모델이 설치되어 있어야 배포가 진행된다.
+실제 DB·Ollama 접근 주소를 설정하고 2절의 네트워크 과제를 해결한 뒤 배포한다. 관리자가 지정한 두 모델이 설치되어 있어야 한다. 새 환경 파일 생성만으로 DB나 Ollama 연결이 준비되는 것은 아니다.
 
 운영 환경 준비는 staging 검증 후 `bash deploy/scripts/prepare-env.sh prod`로 별도로 수행한다. main 병합은 production 배포를 시작할 수 있으므로 운영 준비를 먼저 완료한다.
 
@@ -94,7 +122,7 @@ API·AI DB 포트가 다른 프로세스에 사용 중인지 확인한다. 현�
 
 PDF, 실제 `.env`, 개인키는 이 압축 파일에 포함하지 않는다. 원격 `deploy-remote.sh`는 단기 GHCR 인증을 준비하고 `deploy.sh`를 실행한다.
 
-`deploy.sh`는 설치된 Ollama 모델을 확인하고 설정 파일을 복사한 뒤 `docker compose pull`과 `up --wait --wait-timeout 180`으로 API와 DB를 시작한다. 실제 API 컨테이너 이미지가 요청한 SHA인지 확인하고 `/health`를 검사한다. 성공 시 `.current-image`와 `.deployment.env`를 기록한다.
+`deploy.sh`는 설치된 Ollama 모델을 확인하고 설정 파일을 복사한 뒤 `docker compose pull`과 `up --wait --wait-timeout 180`으로 API를 시작한다. 실제 API 컨테이너 이미지가 요청한 SHA인지 확인하고 `/health`를 검사한다. 성공 시 `.current-image`와 `.deployment.env`를 기록한다.
 
 동시 배포는 환경별 하나만 실행한다. 진행 중 배포를 새 실행 때문에 취소하지 않는다. 기본 브랜치에 workflow가 없는 동안은 새로운 `workflow_dispatch`를 시작할 수 없으므로 develop push 또는 준비한 검증 브랜치 trigger를 사용한다. 기능 PR을 develop에 병합하면 staging 배포가 시작된다.
 
@@ -112,7 +140,7 @@ dc() {
 dc ps -a
 dc images api
 dc logs --tail=100 api
-curl --fail http://127.0.0.1:18000/health
+dc exec -T api curl --fail http://127.0.0.1:18000/health
 cat .current-image
 ```
 
@@ -125,10 +153,10 @@ health는 DB 연결과 테이블 조회를 확인하며 모델 이름은 설정�
 원본 PDF는 코드 이미지에 포함하지 않는다. 검토한 전체 PDF 집합을 환경별 documents에 배치하고 DB/PDF를 백업한 다음 해당 환경에서 색인한다.
 
 ```bash
-dc exec -T api python -m app.ingest
+dc exec -T api python -m app.ingestion.service
 ```
 
-이 명령은 `regulation_chunks`와 `phone_contacts`를 초기화한다. 일부 문서 처리 실패나 전화번호 저장 실패가 완료 로그와 함께 발생할 수 있으므로 실패 파일·데이터 수·출처·대표 질의를 확인한다. 일반 코드 배포는 색인을 자동 실행하지 않는다. 기존 운영 FAQ도 새 AI DB로 자동 복제되지 않는다.
+이 명령은 `regulation_chunks`와 `phone_contacts`를 초기화한다. 현재 전체 교체 방식과 트랜잭션 경계는 유지된다. 일부 문서 처리 실패나 전화번호 저장 실패가 완료 로그와 함께 발생할 수 있으므로 실패 파일·데이터 수·출처·대표 질의를 확인한다. 일반 코드 배포는 색인을 자동 실행하지 않는다. 기존 운영 FAQ도 새 AI DB로 자동 복제되지 않는다.
 
 ## 8. 복구 범위
 

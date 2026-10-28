@@ -1,40 +1,44 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from threading import Lock
 from typing import Iterator
 
 import psycopg2
 import psycopg2.pool
 
-from app.core.config import (
-    DATABASE_URL,
-    EMBEDDING_DIM,
-)
+from app.core.config import DATABASE_URL, EMBEDDING_DIM
+
+_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+_pool_lock = Lock()
 
 
-_pool: psycopg2.pool.SimpleConnectionPool | None = None
-
-
-def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     """
     Postgres 연결 풀을 지연 생성하여 반환한다.
     """
     global _pool
 
-    if _pool is None:
-        _pool = psycopg2.pool.SimpleConnectionPool(
-            minconn=1,
-            maxconn=10,
-            dsn=DATABASE_URL,
-        )
+    with _pool_lock:
+        if _pool is None:
+            _pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=1, maxconn=10, dsn=DATABASE_URL
+            )
+        return _pool
 
-    return _pool
+
+def close_pool() -> None:
+    """서버 종료 시 연결 풀을 닫고 다음 초기화를 준비한다."""
+    global _pool
+
+    with _pool_lock:
+        if _pool is not None:
+            _pool.closeall()
+            _pool = None
 
 
 @contextmanager
-def get_conn() -> Iterator[
-    psycopg2.extensions.connection
-]:
+def get_conn() -> Iterator[psycopg2.extensions.connection]:
     """
     연결 풀에서 연결을 하나 빌려 사용하고 반환한다.
 
@@ -260,24 +264,21 @@ USING gin (
 # pgvector 변환
 # ============================================================
 
-def to_vector_literal(
-    embedding: list[float],
-) -> str:
+
+def to_vector_literal(embedding: list[float]) -> str:
     """
     임베딩 리스트를 pgvector 리터럴 문자열로 변환한다.
 
     SQL에서 %s::vector 형태로 바인딩하여 사용한다.
     """
 
-    return "[" + ",".join(
-        repr(float(value))
-        for value in embedding
-    ) + "]"
+    return "[" + ",".join(repr(float(value)) for value in embedding) + "]"
 
 
 # ============================================================
 # 스키마 초기화
 # ============================================================
+
 
 def init_schema() -> None:
     """
@@ -291,129 +292,15 @@ def init_schema() -> None:
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                SCHEMA_SQL
-            )
-
-
-# ============================================================
-# 전화번호부 기존 데이터 삭제
-# ============================================================
-
-def delete_phone_contacts_by_source(
-    source: str,
-) -> int:
-    """
-    특정 전화번호부 PDF의 기존 구조화 연락처를 삭제한다.
-
-    재-ingest 시 중복 방지용.
-
-    반환:
-        삭제된 행 수
-    """
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                DELETE FROM phone_contacts
-                WHERE source = %s
-                """,
-                (
-                    source,
-                ),
-            )
-
-            deleted_count = (
-                cur.rowcount
-            )
-
-    return deleted_count
-
-
-# ============================================================
-# 전화번호 연락처 1건 저장
-# ============================================================
-
-def upsert_phone_contact(
-    *,
-    contact_id: str,
-    source: str,
-    page: int,
-    contact_index: int,
-    major_org: str,
-    organization: str,
-    role: str,
-    phone: str,
-    content: str,
-) -> None:
-    """
-    구조화된 전화번호 연락처 한 건을 저장한다.
-
-    같은 id가 이미 존재하면 업데이트한다.
-    """
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                INSERT INTO phone_contacts (
-                    id,
-                    source,
-                    page,
-                    contact_index,
-                    major_org,
-                    organization,
-                    role,
-                    phone,
-                    content
-                )
-                VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s
-                )
-
-                ON CONFLICT (id)
-
-                DO UPDATE SET
-                    source = EXCLUDED.source,
-                    page = EXCLUDED.page,
-                    contact_index = EXCLUDED.contact_index,
-                    major_org = EXCLUDED.major_org,
-                    organization = EXCLUDED.organization,
-                    role = EXCLUDED.role,
-                    phone = EXCLUDED.phone,
-                    content = EXCLUDED.content
-                """,
-                (
-                    contact_id,
-                    source,
-                    page,
-                    contact_index,
-                    major_org,
-                    organization,
-                    role,
-                    phone,
-                    content,
-                ),
-            )
+            cur.execute(SCHEMA_SQL)
 
 
 # ============================================================
 # 여러 전화번호 연락처 일괄 저장
 # ============================================================
 
-def upsert_phone_contacts(
-    contacts: list[dict],
-) -> int:
+
+def upsert_phone_contacts(contacts: list[dict]) -> int:
     """
     구조화된 연락처 여러 건을 한 번에 저장한다.
 
@@ -435,34 +322,13 @@ def upsert_phone_contacts(
             (
                 contact["id"],
                 contact["source"],
-                int(
-                    contact["page"]
-                ),
-                int(
-                    contact[
-                        "contact_index"
-                    ]
-                ),
-                contact.get(
-                    "major_org",
-                    "",
-                ),
-                contact.get(
-                    "organization",
-                    "",
-                ),
-                contact.get(
-                    "role",
-                    "",
-                ),
-                contact.get(
-                    "phone",
-                    "",
-                ),
-                contact.get(
-                    "content",
-                    "",
-                ),
+                int(contact["page"]),
+                int(contact["contact_index"]),
+                contact.get("major_org", ""),
+                contact.get("organization", ""),
+                contact.get("role", ""),
+                contact.get("phone", ""),
+                contact.get("content", ""),
             )
         )
 
@@ -509,86 +375,13 @@ def upsert_phone_contacts(
                 rows,
             )
 
-    return len(
-        rows
-    )
-
-
-# ============================================================
-# 전화번호부 조회
-# ============================================================
-
-def get_phone_contacts_by_source(
-    source: str,
-) -> list[dict]:
-    """
-    특정 전화번호부 PDF에 저장된 구조화 연락처 전체 조회.
-    """
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    source,
-                    page,
-                    contact_index,
-                    major_org,
-                    organization,
-                    role,
-                    phone,
-                    content
-                FROM phone_contacts
-                WHERE source = %s
-                ORDER BY
-                    page,
-                    contact_index
-                """,
-                (
-                    source,
-                ),
-            )
-
-            rows = (
-                cur.fetchall()
-            )
-
-    result = []
-
-    for row in rows:
-
-        result.append(
-            {
-                "id": row[0],
-                "source": row[1],
-                "page": row[2],
-                "contact_index": row[3],
-                "major_org": (
-                    row[4] or ""
-                ),
-                "organization": (
-                    row[5] or ""
-                ),
-                "role": (
-                    row[6] or ""
-                ),
-                "phone": (
-                    row[7] or ""
-                ),
-                "content": (
-                    row[8] or ""
-                ),
-            }
-        )
-
-    return result
+    return len(rows)
 
 
 # ============================================================
 # DB 상태 확인
 # ============================================================
+
 
 def check_db() -> dict[str, int]:
     """
@@ -601,49 +394,29 @@ def check_db() -> dict[str, int]:
     with get_conn() as conn:
         with conn.cursor() as cur:
 
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT count(*)
                 FROM regulation_chunks
-                """
-            )
+                """)
 
-            regulation_count = (
-                cur.fetchone()[0]
-            )
+            regulation_count = cur.fetchone()[0]
 
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT count(*)
                 FROM faq_chunks
-                """
-            )
+                """)
 
-            faq_count = (
-                cur.fetchone()[0]
-            )
+            faq_count = cur.fetchone()[0]
 
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT count(*)
                 FROM phone_contacts
-                """
-            )
+                """)
 
-            phone_count = (
-                cur.fetchone()[0]
-            )
+            phone_count = cur.fetchone()[0]
 
     return {
-        "regulation_chunks": (
-            regulation_count
-        ),
-
-        "faq_chunks": (
-            faq_count
-        ),
-
-        "phone_contacts": (
-            phone_count
-        ),
+        "regulation_chunks": (regulation_count),
+        "faq_chunks": (faq_count),
+        "phone_contacts": (phone_count),
     }
