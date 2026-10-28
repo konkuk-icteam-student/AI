@@ -12,7 +12,7 @@ from app.core.config import (
     ensure_directories,
     validate_config,
 )
-from app.infrastructure.database import check_db, init_schema
+from app.infrastructure.database import check_db, close_pool, init_schema
 from app.faqs.router import router as faqs_router
 
 
@@ -41,8 +41,11 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"[시작 경고] {exc}")
 
-    yield
-    print("규정+FAQ RAG API 서버 종료")
+    try:
+        yield
+    finally:
+        close_pool()
+        print("규정+FAQ RAG API 서버 종료")
 
 
 app = FastAPI(

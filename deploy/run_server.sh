@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# config.py는 환경변수만 읽으므로 .env를 셸에서 로드한다
+# app/core/config.py는 환경변수만 읽으므로 .env를 셸에서 로드한다
 if [ -f .env ]; then
     set -a
     # shellcheck disable=SC1091

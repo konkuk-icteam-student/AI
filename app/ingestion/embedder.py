@@ -55,7 +55,9 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        detail = f"\nOllama 응답: {exc.response.text}" if exc.response is not None else ""
+        detail = (
+            f"\nOllama 응답: {exc.response.text}" if exc.response is not None else ""
+        )
         raise RuntimeError(f"임베딩 요청에 실패했습니다: {exc}{detail}") from exc
 
     data = response.json()
