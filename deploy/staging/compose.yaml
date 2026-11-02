@@ -9,11 +9,15 @@ services:
       - .env
     environment:
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+    # Swagger is reachable through an SSH tunnel only, not a public host port.
+    # The deploy script enforces API_BIND_ADDRESS=127.0.0.1.
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-18000}:${API_PORT:-18000}"
     command:
       - uvicorn
       - app.main:app
       - --host
-      - "${API_BIND_ADDRESS:-127.0.0.1}"
+      - "0.0.0.0"
       - --port
       - "${API_PORT:-18000}"
     volumes:
