@@ -140,6 +140,23 @@ done
         self.assertIn(f"IMAGE_TAG={OLD_TAG}", (runtime / ".deployment.env").read_text())
         self.assertIn(f"{OLD_TAG} compose", self.log.read_text())
 
+
+    def test_cleanup_dry_run_never_removes_images(self):
+        runtime = self.prepare()
+        (runtime / ".current-image").write_text(OLD_TAG + "\\n")
+        self.env["IMAGE_REPOSITORY"] = IMAGE
+        result = self.run_script("cleanup-images.sh", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("image rm", self.log.read_text() if self.log.exists() else "")
+
+    def test_success_retains_previous_release_marker(self):
+        runtime = self.prepare()
+        (runtime / ".current-image").write_text(OLD_TAG + "\\n")
+        result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((runtime / ".previous-image").read_text().strip(), OLD_TAG)
+        self.assertEqual((runtime / ".current-image").read_text().strip(), NEW_TAG)
+
     def test_missing_environment_stops_before_container_operations(self):
         result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
         self.assertNotEqual(result.returncode, 0)
