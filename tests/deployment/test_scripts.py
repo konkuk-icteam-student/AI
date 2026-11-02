@@ -149,6 +149,15 @@ done
         self.assertIn("DATABASE_URL", result.stderr)
         self.assertFalse(self.log.exists())
 
+    def test_non_loopback_swagger_binding_is_rejected(self):
+        runtime = self.prepare()
+        with (runtime / ".env").open("a") as env_file:
+            env_file.write("API_BIND_ADDRESS=0.0.0.0\\n")
+        result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("127.0.0.1", result.stderr)
+        self.assertFalse(self.log.exists())
+
     def test_success_records_verified_image_and_readable_configuration(self):
         runtime = self.prepare()
         result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
