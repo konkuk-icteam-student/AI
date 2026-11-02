@@ -143,7 +143,7 @@ done
 
     def test_cleanup_dry_run_never_removes_images(self):
         runtime = self.prepare()
-        (runtime / ".current-image").write_text(OLD_TAG + "\\n")
+        (runtime / ".current-image").write_text(OLD_TAG + "\n")
         self.env["IMAGE_REPOSITORY"] = IMAGE
         result = self.run_script("cleanup-images.sh", "--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -151,7 +151,7 @@ done
 
     def test_success_retains_previous_release_marker(self):
         runtime = self.prepare()
-        (runtime / ".current-image").write_text(OLD_TAG + "\\n")
+        (runtime / ".current-image").write_text(OLD_TAG + "\n")
         result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((runtime / ".previous-image").read_text().strip(), OLD_TAG)
