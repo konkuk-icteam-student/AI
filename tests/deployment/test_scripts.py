@@ -115,6 +115,16 @@ done
             env_file.write("OLLAMA_BASE_URL=http://127.0.0.1:11434\n")
         return runtime
 
+    def test_staging_swagger_is_published_on_host_loopback_only(self):
+        staging_compose = (self.source / "deploy/staging/compose.yaml").read_text()
+        prod_compose = (self.source / "deploy/prod/compose.yaml").read_text()
+        self.assertIn(
+            '"${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-18000}:${API_PORT:-18000}"',
+            staging_compose,
+        )
+        self.assertIn('      - "0.0.0.0"', staging_compose)
+        self.assertNotIn("\\n    ports:", prod_compose)
+
     def test_preparation_preserves_external_database_configuration(self):
         runtime = self.prepare()
         env_file = runtime / ".env"
