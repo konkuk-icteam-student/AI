@@ -46,6 +46,11 @@ if [[ "$1" == login ]]; then
     exit 0
 fi
 if [[ "$1" == inspect ]]; then
+    printf '%s %s\\n' "${IMAGE_TAG:-}" "$*" >> "$MOCK_DOCKER_LOG"
+    if [[ "$*" == *".State.Health"* ]]; then
+        printf '%s\\n' "${MOCK_HEALTH_STATUS:-healthy}"
+        exit 0
+    fi
     container="${@: -1}"
     tag="${MOCK_IMAGE_OVERRIDE:-${container#api-}}"
     printf 'ghcr.io/example/chatbot:%s\\n' "$tag"
@@ -142,6 +147,15 @@ done
         self.assertIn(f"IMAGE_TAG={NEW_TAG}", (runtime / ".deployment.env").read_text())
         prompt = self.runtime / "config/staging/prompts/chat_answer.txt"
         self.assertEqual(stat.S_IMODE(prompt.stat().st_mode), 0o644)
+
+    def test_unhealthy_container_is_not_recorded_as_success(self):
+        runtime = self.prepare()
+        self.env["MOCK_HEALTH_STATUS"] = "unhealthy"
+        result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((runtime / ".current-image").exists())
+        self.assertIn("health check failed", result.stderr)
+        self.assertIn("inspect", self.log.read_text())
 
     def test_healthy_but_wrong_image_is_not_recorded_as_success(self):
         runtime = self.prepare()
