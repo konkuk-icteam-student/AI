@@ -46,9 +46,35 @@ if [[ "$1" == login ]]; then
     exit 0
 fi
 if [[ "$1" == inspect ]]; then
+    printf '%s %s\\n' "${IMAGE_TAG:-}" "$*" >> "$MOCK_DOCKER_LOG"
+    if [[ "$*" == *".State.Health"* ]]; then
+        printf '%s\\n' "${MOCK_HEALTH_STATUS:-healthy}"
+        exit 0
+    fi
     container="${@: -1}"
     tag="${MOCK_IMAGE_OVERRIDE:-${container#api-}}"
     printf 'ghcr.io/example/chatbot:%s\\n' "$tag"
+    exit 0
+fi
+if [[ "$1" == image && "$2" == ls ]]; then
+    printf '%s' "${MOCK_IMAGES:-}"
+    exit 0
+fi
+if [[ "$1" == ps && "${2:-}" == --all ]]; then
+    printf '%s' "${MOCK_CONTAINERS:-}"
+    exit 0
+fi
+if [[ "$1" == container && "$2" == inspect ]]; then
+    printf '%s\\n' "${MOCK_CONTAINER_IMAGE_ID:-sha256:active}"
+    exit 0
+fi
+if [[ "$1" == image && "$2" == inspect ]]; then
+    ref="${@: -1}"
+    case "$ref" in
+        ghcr.io/example/chatbot:${MOCK_CURRENT_TAG:-UNSET}) printf 'sha256:current\\n' ;;
+        ghcr.io/example/chatbot:${MOCK_PREVIOUS_TAG:-UNSET}) printf 'sha256:previous\\n' ;;
+        *) exit 1 ;;
+    esac
     exit 0
 fi
 printf '%s %s\\n' "${IMAGE_TAG:-}" "$*" >> "$MOCK_DOCKER_LOG"
@@ -122,6 +148,15 @@ done
         prompt = self.runtime / "config/staging/prompts/chat_answer.txt"
         self.assertEqual(stat.S_IMODE(prompt.stat().st_mode), 0o644)
 
+    def test_unhealthy_container_is_not_recorded_as_success(self):
+        runtime = self.prepare()
+        self.env["MOCK_HEALTH_STATUS"] = "unhealthy"
+        result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((runtime / ".current-image").exists())
+        self.assertIn("health check failed", result.stderr)
+        self.assertIn("inspect", self.log.read_text())
+
     def test_healthy_but_wrong_image_is_not_recorded_as_success(self):
         runtime = self.prepare()
         self.env["MOCK_IMAGE_OVERRIDE"] = OLD_TAG
@@ -139,6 +174,62 @@ done
         self.assertEqual((runtime / ".current-image").read_text().strip(), OLD_TAG)
         self.assertIn(f"IMAGE_TAG={OLD_TAG}", (runtime / ".deployment.env").read_text())
         self.assertIn(f"{OLD_TAG} compose", self.log.read_text())
+
+
+    def test_cleanup_dry_run_never_removes_images(self):
+        runtime = self.prepare()
+        (runtime / ".current-image").write_text(OLD_TAG + "\n")
+        stale_tag = "c" * 40
+        self.env.update({
+            "IMAGE_REPOSITORY": IMAGE,
+            "MOCK_CURRENT_TAG": OLD_TAG,
+            "MOCK_IMAGES": (
+                f"{IMAGE}:{OLD_TAG} sha256:current\n"
+                f"{IMAGE}:{stale_tag} sha256:stale\n"
+            ),
+        })
+        result = self.run_script("cleanup-images.sh", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"KEEP {IMAGE}:{OLD_TAG}", result.stdout)
+        self.assertIn(f"WOULD REMOVE {IMAGE}:{stale_tag}", result.stdout)
+        self.assertNotIn("image rm", self.log.read_text() if self.log.exists() else "")
+
+    def test_cleanup_only_removes_unused_ai_sha_image(self):
+        runtime = self.prepare()
+        (runtime / ".current-image").write_text(NEW_TAG + "\n")
+        (runtime / ".previous-image").write_text(OLD_TAG + "\n")
+        stale_tag = "c" * 40
+        used_tag = "d" * 40
+        self.env.update({
+            "IMAGE_REPOSITORY": IMAGE,
+            "MOCK_CURRENT_TAG": NEW_TAG,
+            "MOCK_PREVIOUS_TAG": OLD_TAG,
+            "MOCK_CONTAINERS": "active-container\n",
+            "MOCK_CONTAINER_IMAGE_ID": "sha256:active",
+            "MOCK_IMAGES": (
+                f"{IMAGE}:{NEW_TAG} sha256:current\n"
+                f"{IMAGE}:{OLD_TAG} sha256:previous\n"
+                f"{IMAGE}:{used_tag} sha256:active\n"
+                f"{IMAGE}:{stale_tag} sha256:stale\n"
+                f"ghcr.io/example/another-project:{stale_tag} sha256:other\n"
+            ),
+        })
+        result = self.run_script("cleanup-images.sh", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.log.read_text()
+        self.assertIn(f"image rm {IMAGE}:{stale_tag}", log)
+        self.assertNotIn(f"image rm {IMAGE}:{NEW_TAG}", log)
+        self.assertNotIn(f"image rm {IMAGE}:{OLD_TAG}", log)
+        self.assertNotIn(f"image rm {IMAGE}:{used_tag}", log)
+        self.assertNotIn("another-project", log)
+
+    def test_success_retains_previous_release_marker(self):
+        runtime = self.prepare()
+        (runtime / ".current-image").write_text(OLD_TAG + "\n")
+        result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((runtime / ".previous-image").read_text().strip(), OLD_TAG)
+        self.assertEqual((runtime / ".current-image").read_text().strip(), NEW_TAG)
 
     def test_missing_environment_stops_before_container_operations(self):
         result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)

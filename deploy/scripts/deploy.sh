@@ -116,7 +116,15 @@ verify_deployment() {
         echo "The running API image does not match the requested release." >&2
         return 1
     fi
-    bash "${repository_root}/deploy/scripts/health-check.sh" "http://127.0.0.1:${api_port}/health" 30
+    # The API stays inside the Docker network. The host has no published API port.
+    # Compose --wait already waits for the container HEALTHCHECK to become healthy.
+    local health_status
+    health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "${container_id}")" || return 1
+    if [[ "${health_status}" != healthy ]]; then
+        echo "API container health check failed (status: ${health_status})." >&2
+        return 1
+    fi
+    echo "Health check passed: ${environment} API container ${container_id}"
 }
 
 rollback() {
@@ -137,7 +145,15 @@ if compose "${image_tag}" pull \
     && verify_deployment "${image_tag}"; then
     printf '%s\n' "${image_tag}" > "${current_image_file}"
     write_deployment_env "${image_tag}"
+    if [[ -n "${previous_image}" && "${previous_image}" != "${image_tag}" ]]; then
+        printf '%s\n' "${previous_image}" > "${runtime_dir}/.previous-image"
+    fi
     echo "Deployment completed: ${environment} ${image_tag}"
+    # Cleanup is best-effort; never fail a healthy deployment due to pruning.
+    if ! IMAGE_REPOSITORY="${image_repository}" DEPLOY_ROOT="${deploy_root}" \
+        bash "${repository_root}/deploy/scripts/cleanup-images.sh" --apply; then
+        echo "WARNING: AI image cleanup failed; deployment remains successful." >&2
+    fi
 else
     echo "Deployment failed: ${environment} ${image_tag}" >&2
     rollback || true
