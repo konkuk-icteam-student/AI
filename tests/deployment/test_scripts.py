@@ -51,6 +51,27 @@ if [[ "$1" == inspect ]]; then
     printf 'ghcr.io/example/chatbot:%s\\n' "$tag"
     exit 0
 fi
+if [[ "$1" == image && "$2" == ls ]]; then
+    printf '%s' "${MOCK_IMAGES:-}"
+    exit 0
+fi
+if [[ "$1" == ps && "${2:-}" == --all ]]; then
+    printf '%s' "${MOCK_CONTAINERS:-}"
+    exit 0
+fi
+if [[ "$1" == container && "$2" == inspect ]]; then
+    printf '%s\\n' "${MOCK_CONTAINER_IMAGE_ID:-sha256:active}"
+    exit 0
+fi
+if [[ "$1" == image && "$2" == inspect ]]; then
+    ref="${@: -1}"
+    case "$ref" in
+        ghcr.io/example/chatbot:${MOCK_CURRENT_TAG:-UNSET}) printf 'sha256:current\\n' ;;
+        ghcr.io/example/chatbot:${MOCK_PREVIOUS_TAG:-UNSET}) printf 'sha256:previous\\n' ;;
+        *) exit 1 ;;
+    esac
+    exit 0
+fi
 printf '%s %s\\n' "${IMAGE_TAG:-}" "$*" >> "$MOCK_DOCKER_LOG"
 for arg in "$@"; do
     if [[ "$arg" == up && "${IMAGE_TAG:-}" == "${MOCK_FAIL_UP_TAG:-never}" ]]; then
@@ -144,10 +165,49 @@ done
     def test_cleanup_dry_run_never_removes_images(self):
         runtime = self.prepare()
         (runtime / ".current-image").write_text(OLD_TAG + "\n")
-        self.env["IMAGE_REPOSITORY"] = IMAGE
+        stale_tag = "c" * 40
+        self.env.update({
+            "IMAGE_REPOSITORY": IMAGE,
+            "MOCK_CURRENT_TAG": OLD_TAG,
+            "MOCK_IMAGES": (
+                f"{IMAGE}:{OLD_TAG} sha256:current\n"
+                f"{IMAGE}:{stale_tag} sha256:stale\n"
+            ),
+        })
         result = self.run_script("cleanup-images.sh", "--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"KEEP {IMAGE}:{OLD_TAG}", result.stdout)
+        self.assertIn(f"WOULD REMOVE {IMAGE}:{stale_tag}", result.stdout)
         self.assertNotIn("image rm", self.log.read_text() if self.log.exists() else "")
+
+    def test_cleanup_only_removes_unused_ai_sha_image(self):
+        runtime = self.prepare()
+        (runtime / ".current-image").write_text(NEW_TAG + "\n")
+        (runtime / ".previous-image").write_text(OLD_TAG + "\n")
+        stale_tag = "c" * 40
+        used_tag = "d" * 40
+        self.env.update({
+            "IMAGE_REPOSITORY": IMAGE,
+            "MOCK_CURRENT_TAG": NEW_TAG,
+            "MOCK_PREVIOUS_TAG": OLD_TAG,
+            "MOCK_CONTAINERS": "active-container\n",
+            "MOCK_CONTAINER_IMAGE_ID": "sha256:active",
+            "MOCK_IMAGES": (
+                f"{IMAGE}:{NEW_TAG} sha256:current\n"
+                f"{IMAGE}:{OLD_TAG} sha256:previous\n"
+                f"{IMAGE}:{used_tag} sha256:active\n"
+                f"{IMAGE}:{stale_tag} sha256:stale\n"
+                f"ghcr.io/example/another-project:{stale_tag} sha256:other\n"
+            ),
+        })
+        result = self.run_script("cleanup-images.sh", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.log.read_text()
+        self.assertIn(f"image rm {IMAGE}:{stale_tag}", log)
+        self.assertNotIn(f"image rm {IMAGE}:{NEW_TAG}", log)
+        self.assertNotIn(f"image rm {IMAGE}:{OLD_TAG}", log)
+        self.assertNotIn(f"image rm {IMAGE}:{used_tag}", log)
+        self.assertNotIn("another-project", log)
 
     def test_success_retains_previous_release_marker(self):
         runtime = self.prepare()
