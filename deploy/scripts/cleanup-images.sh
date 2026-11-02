@@ -18,6 +18,7 @@ fi
 
 # Protect production AND staging releases, including one local rollback image each.
 declare -A protected_refs=()
+protected_count=0
 for environment in staging prod; do
     for marker in .current-image .previous-image; do
         path="${deploy_root}/${environment}/${marker}"
@@ -28,11 +29,12 @@ for environment in staging prod; do
             exit 1
         fi
         protected_refs["${image_repository}:${tag}"]=1
+        protected_count=$((protected_count + 1))
     done
 done
 
 # No reliable release metadata: fail closed rather than remove possible rollback images.
-if (( ${#protected_refs[@]} == 0 )); then
+if (( protected_count == 0 )); then
     echo "No recorded releases; skipping image cleanup."
     exit 0
 fi
