@@ -17,8 +17,13 @@ RUN apt-get update \
     && adduser --system --ingroup app app
 
 COPY requirements.txt ./
+# PyTorch is used by the in-container reranker. LLM/embedding run in host Ollama.
+# Install the CPU wheel first to avoid downloading multi-GB CUDA dependencies.
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+    && python -m pip install torch==2.9.1 \
+        --index-url https://download.pytorch.org/whl/cpu \
+    && python -m pip install -r requirements.txt \
+    && python -c "import torch; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'"
 
 COPY app ./app
 COPY resources ./resources
