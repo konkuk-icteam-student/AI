@@ -137,7 +137,15 @@ if compose "${image_tag}" pull \
     && verify_deployment "${image_tag}"; then
     printf '%s\n' "${image_tag}" > "${current_image_file}"
     write_deployment_env "${image_tag}"
+    if [[ -n "${previous_image}" && "${previous_image}" != "${image_tag}" ]]; then
+        printf '%s\n' "${previous_image}" > "${runtime_dir}/.previous-image"
+    fi
     echo "Deployment completed: ${environment} ${image_tag}"
+    # Cleanup is best-effort; never fail a healthy deployment due to pruning.
+    if ! IMAGE_REPOSITORY="${image_repository}" DEPLOY_ROOT="${deploy_root}" \
+        bash "${repository_root}/deploy/scripts/cleanup-images.sh" --apply; then
+        echo "WARNING: AI image cleanup failed; deployment remains successful." >&2
+    fi
 else
     echo "Deployment failed: ${environment} ${image_tag}" >&2
     rollback || true
