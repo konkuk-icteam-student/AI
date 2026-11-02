@@ -123,7 +123,7 @@ done
             staging_compose,
         )
         self.assertIn('      - "0.0.0.0"', staging_compose)
-        self.assertNotIn("\\n    ports:", prod_compose)
+        self.assertNotIn("\n    ports:", prod_compose)
 
     def test_preparation_preserves_external_database_configuration(self):
         runtime = self.prepare()
@@ -152,7 +152,7 @@ done
     def test_non_loopback_swagger_binding_is_rejected(self):
         runtime = self.prepare()
         with (runtime / ".env").open("a") as env_file:
-            env_file.write("API_BIND_ADDRESS=0.0.0.0\\n")
+            env_file.write("API_BIND_ADDRESS=0.0.0.0\n")
         result = self.run_script("deploy.sh", "staging", IMAGE, NEW_TAG)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("127.0.0.1", result.stderr)
