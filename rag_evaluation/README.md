@@ -19,9 +19,14 @@ scripts/run_rag_batch.py  # 일괄 실행 스크립트
 
 ## 서버에서 실행
 
+`develop` 배포가 성공하면 `/home/kuai/chatbot/staging`에 이 저장소가 자동으로 동기화됩니다. `main` 배포가 성공하면 `/home/kuai/chatbot/prod`에 동기화됩니다. 두 폴더는 Git 브랜치를 추적하며 결과 파일은 유지합니다. Docker 배포 경로 `/opt/chatbot-service`와는 별개입니다.
+
 Python 3.6 이상, Docker CLI, 실행 중인 RAG 컨테이너의 `curl`이 필요합니다. **호스트 서버**에서 실행하므로 외부 포트를 공개할 필요가 없습니다.
 
 ```bash
+# staging 서버에서 소스 브랜치 확인
+cd ~/chatbot/staging
+git branch --show-current  # develop
 # 질문 CSV 중 3문항만 먼저 테스트
 python3 scripts/run_rag_batch.py --input rag_evaluation/questions/20261104_161326_regulations_1-0-1_1-0-9.csv --limit 3
 
