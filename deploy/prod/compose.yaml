@@ -24,6 +24,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Resolve Docker's host alias on Linux for the host Ollama service.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}:${IMAGE_TAG:?IMAGE_TAG is required}"
     restart: unless-stopped
     # Set DATABASE_URL in .env to connect to the backend PostgreSQL server.
