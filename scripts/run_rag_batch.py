@@ -197,6 +197,10 @@ def main(argv=None):
     parser.add_argument('--limit', type=int, default=0, help='파일당 새 질문 처리 개수, 0=전체')
     parser.add_argument('--pause', type=float, default=0)
     parser.add_argument('--run-id', help='이어하기용 실행 ID (예: 20261104_154500)')
+    parser.add_argument('--publish-results', action='store_true',
+                        help='질문 처리가 끝난 후 모든 답변이 OK인 결과 CSV를 GitHub에 Push')
+    parser.add_argument('--publish-environment', choices=('staging', 'prod'), default='staging',
+                        help='GitHub 결과 브랜치 선택 (기본값: staging)')
     args = parser.parse_args(argv)
     if args.limit < 0 or args.retries < 0 or args.timeout < 1 or args.pause < 0:
         parser.error('limit/retries/pause는 0 이상, timeout은 1 이상이어야 합니다.')
@@ -213,6 +217,11 @@ def main(argv=None):
     print('RAG API: docker exec {} → {}'.format(args.container, args.url))
     for path in paths:
         run_file(path, args, run_id)
+    if args.publish_results:
+        # Completed results only; a --limit run or failed API requests are not uploaded.
+        command = [sys.executable, str(ROOT / 'scripts' / 'publish_rag_results.py'),
+                   '--environment', args.publish_environment, '--run-id', run_id]
+        return subprocess.call(command)
     return 0
 
 
