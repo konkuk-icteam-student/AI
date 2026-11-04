@@ -1,7 +1,29 @@
 name: chatbot-production
 
 services:
+  # Dedicated production PostgreSQL. Separate Docker network + persistent volume.
+  # Never publish the database port on the host.
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: chatbot-production-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?Set POSTGRES_DB in prod .env}"
+      POSTGRES_USER: "${POSTGRES_USER:?Set POSTGRES_USER in prod .env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in prod .env}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   api:
+    depends_on:
+      postgres:
+        condition: service_healthy
     image: "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}:${IMAGE_TAG:?IMAGE_TAG is required}"
     restart: unless-stopped
     # Set DATABASE_URL in .env to connect to the backend PostgreSQL server.
@@ -32,3 +54,4 @@ services:
 volumes:
   model-cache:
   ocr-cache:
+  postgres_data:
