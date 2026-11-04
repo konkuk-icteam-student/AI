@@ -69,6 +69,7 @@ tar -czf "${transport_dir}/bundle.tar.gz" -C "${repository_root}" \
     deploy/prod/compose.yaml deploy/prod/.env.example \
     deploy/scripts/deploy.sh deploy/scripts/health-check.sh \
     deploy/scripts/deploy-remote.sh deploy/scripts/cleanup-images.sh \
+    deploy/scripts/sync-checkout.sh \
     resources/prompts/chat_answer.txt resources/search/query_expansions.json
 scp "${ssh_options[@]}" -P "${ssh_port}" "${transport_dir}/bundle.tar.gz" \
     "${destination}:${release_dir}/bundle.tar.gz"
