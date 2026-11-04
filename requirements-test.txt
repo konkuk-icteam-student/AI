@@ -1,0 +1,5 @@
+# API 계약·DB 풀·PDF 처리를 외부 서비스 없이 검증하는 테스트 의존성.
+fastapi>=0.115
+requests>=2.32
+psycopg2-binary>=2.9
+pymupdf>=1.24

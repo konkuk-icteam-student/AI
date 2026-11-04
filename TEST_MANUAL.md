@@ -1,6 +1,6 @@
 # RAG 서비스 테스트 매뉴얼
 
-이 문서는 `jonghwa` 브랜치의 기능을 IntelliJ IDEA와 로컬 터미널에서 검증하는 절차를 정리한다.
+이 문서는 현재 기능을 IntelliJ IDEA와 로컬 터미널에서 검증하는 절차를 정리한다.
 
 ## 1. 테스트 범위
 
@@ -29,7 +29,7 @@ git status --short --branch
 기대 결과:
 
 - 현재 경로의 끝이 `/AI`이다.
-- 브랜치가 `jonghwa`다.
+- 현재 작업 브랜치가 검증하려는 변경을 포함하는지 확인한다.
 - 수정한 파일이 없다면 `git status`에 별도 목록이 나오지 않는다.
 
 ## 3. Python 실행 환경
@@ -56,16 +56,17 @@ Working directory가 다르면 `No module named app` 오류가 발생한다.
 
 ## 4. 1단계: 외부 서비스 없이 자동 테스트
 
-DB나 Ollama를 실행하지 않고도 가장 중요한 변경을 확인할 수 있다.
+DB나 Ollama를 실행하지 않고도 변경을 확인할 수 있다. OCR·GPU 의존성이 필요 없는 테스트 전용 패키지를 먼저 설치한다.
 
 ```bash
+python -m pip install -r requirements-test.txt
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 기대 결과:
 
 ```text
-Ran 11 tests
+Ran ... tests
 OK
 ```
 
@@ -78,6 +79,7 @@ OK
 - 목차의 `제1조 목적 1`을 실제 조문으로 잘못 인식하지 않는다.
 - 조문이 없는 문서는 기존 고정 길이 청킹을 사용한다.
 - 프롬프트와 검색 확장 JSON 형식을 검증한다.
+- 동시 DB 풀 초기화·rollback, 제한시간 검증, 문서 처리와 임베딩 개수 검증을 확인한다.
 
 IntelliJ에서는 `tests` 디렉터리를 우클릭한 뒤 `Run 'Unittests in tests'`를 선택해도 된다.
 

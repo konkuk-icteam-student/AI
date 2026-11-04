@@ -19,11 +19,30 @@ develop -> PR main -> CI -> production
 
 ## 구조
 
-- **저장소**: Postgres + pgvector (CommuteMate와 동일 인스턴스 공유, `regulation_chunks` / `faq_chunks`)
+기능별 실제 구현 경로를 직접 사용한다. 이전 최상위 호환 모듈은 제거했다.
+
+| 기능 | 실제 구현 경로 |
+|---|---|
+| FastAPI 진입점 | `app/main.py` (`app.main:app`) |
+| 환경설정 | `app/core/config.py` |
+| DB 연결·스키마 | `app/infrastructure/database.py` |
+| 챗봇 답변 생성 | `app/chat/service.py` |
+| 규정·FAQ 검색 | `app/search/service.py` |
+| 검색 결과 재정렬 | `app/search/reranker.py` |
+| PDF 인덱싱 순서 | `app/ingestion/service.py` |
+| 인덱싱 저장·연락처 변환 | `app/ingestion/storage.py`, `app/ingestion/contacts.py` |
+| 공통 임베딩 처리 | `app/ingestion/embedder.py` |
+| PDF 파싱·OCR·문서 처리 | `app/ingestion/parser.py`, `app/ingestion/ocr.py`, `app/ingestion/records.py` |
+| 조문 청킹 | `app/ingestion/chunker.py` |
+| FAQ 청킹·저장 | `app/faqs/chunker.py`, `app/faqs/service.py` |
+
+Python 코드에서도 `from app.infrastructure.database import get_conn`처럼 실제 모듈을 직접 import한다.
+
+- **저장소**: 챗봇 전용 PostgreSQL + pgvector (`regulation_chunks` / `faq_chunks` / `phone_contacts`). 연결은 `DATABASE_URL`로 지정하며 업무일지 DB와 구분한다.
 - **임베딩**: Ollama `qwen3-embedding:0.6b` (1024차원) — 문서/질문 모두 이 서비스에서 임베딩
 - **검색**: 소스별 독립 하이브리드 — 벡터(코사인) + 키워드(`to_tsvector`) → RRF(k=60) → `BAAI/bge-reranker-v2-m3` 재정렬
 - **LLM**: Ollama `qwen3:8b` (think 비활성화)
-- **챗봇 게이트**: 규정·FAQ 둘 다 근거 0건일 때만 LLM 미호출("관련 규정을 찾을 수 없습니다"). FAQ만 있으면 "규정 근거 없음"을 명시하고 답변. 규정과 FAQ 충돌 시 `CONFLICT` 마커로 감지.
+- **챗봇 게이트**: 규정·FAQ 둘 다 근거 0건일 때만 LLM 미호출("관련 내용을 찾을 수 없습니다"). FAQ만 있으면 "규정 근거 없음"을 명시하고 답변. 규정과 FAQ 충돌 시 `CONFLICT` 마커로 감지.
 
 ### 관리자가 수정할 수 있는 파일
 
@@ -61,7 +80,7 @@ pip install -r requirements.txt
 ollama pull qwen3-embedding:0.6b
 ollama pull qwen3:8b
 
-# 3. 환경 변수 (CommuteMate Postgres 공유)
+# 3. 환경 변수 (챗봇 전용 DB)
 export DATABASE_URL="postgresql://<user>:<password>@localhost:5432/<db>"
 export OLLAMA_BASE_URL="http://localhost:11434"
 
@@ -74,43 +93,20 @@ uvicorn app.main:app --port 8000
 
 스키마(`vector` 확장, 테이블, HNSW/GIN 인덱스)는 서버 시작 또는 ingest 시 자동 생성된다 (`app/infrastructure/database.py`의 `init_schema`).
 
-## 운영 배포 구성: SSH와 기존 서버 Ollama
+## 운영 배포 구성
 
-현재 배포 대상은 CommuteMate와 같은 `203.252.168.90` 서버다. GitHub-hosted runner에서 SSH로 접속해 API와 환경별 AI 전용 DB를 배포하고 호스트의 기존 Ollama를 사용한다. API는 staging `127.0.0.1:18000`, production `127.0.0.1:8000`에서 동작하도록 구성했다. 서버 준비·Secrets·데이터 갱신·복구 절차는 [DEPLOYMENT.md](DEPLOYMENT.md)를 따른다. 아래 `.117`의 venv 실행 방식은 이전 분리 구성의 참고 절차다.
+현재 Compose는 API 컨테이너만 실행하며 기본 bridge 네트워크를 사용한다. 챗봇 전용 DB와 호스트 Ollama 주소는 서버 `.env`에 설정하고, 문서·설정·모델 캐시는 기존 마운트로 유지한다.
 
-## 이전 원격 서버 배포 (RAG+LLM 분리 구성)
+업무일지와 공유할 네트워크·alias 선언 및 배포 스크립트의 loopback 검사는 아직 정비가 필요하다. 현재 코드만으로 백엔드 연동 또는 운영 배포 완료를 의미하지 않는다. 상세 설정과 미완료 항목은 [DEPLOYMENT.md](DEPLOYMENT.md)를 따른다. 이전 venv 방식은 [참고 기록](docs/legacy-deployment.md)으로 분리했다.
 
-RAG+Ollama+청크DB를 원격 서버에, Spring/프론트/Spring용 DB를 로컬에 두는 구성.
-Spring과는 `faq_id`로만 연결되므로 청크 DB는 원격 서버에만 있으면 된다.
+## 자동 테스트
 
 ```bash
-# 1. [로컬] 코드 복사 (.venv/.git 제외)
-rsync -av --exclude .venv --exclude .git --exclude __pycache__ \
-    "~/Desktop/code/task diary/regulation-rag/" \
-    <user>@203.252.168.117:~/regulation-rag/
-
-# 2. [서버] 최초 셋업 — venv, Postgres+pgvector 컨테이너, Ollama+모델, .env
-ssh <user>@203.252.168.117
-cd ~/regulation-rag
-bash deploy/setup_server.sh
-
-# 3. [서버] 규정 인덱싱 후 서버 실행 (0.0.0.0:8000)
-bash deploy/run_server.sh ingest
-bash deploy/run_server.sh          # nohup 백그라운드, stop/log 서브커맨드 지원
-
-# 4. [로컬] 연결 확인
-curl http://203.252.168.117:8000/health
-
-# 5. [로컬] Spring 실행
-export RAG_SERVICE_URL="http://203.252.168.117:8000"
-# + 로컬 Postgres용 DB_URL/DB_USERNAME/DB_PASSWORD/DB_DRIVER/JPA_DATABASE_PLATFORM
-./gradlew bootRun
+python -m pip install -r requirements-test.txt
+python -m unittest discover -s tests -v
 ```
 
-**보안 주의 (테스트 구성 기준)**
-- 방화벽에서 **8000 포트만** 외부 개방. Postgres(5432)와 Ollama(11434)는 스크립트가 127.0.0.1에 바인딩하므로 외부 미노출.
-- RAG API에 인증이 없으므로 운영 전에 API 키 또는 사내망 제한 필요.
-- GPU 없는 서버면 CPU 추론으로 동작은 하지만 챗봇 응답이 매우 느려진다 (qwen3:8b 기준 분 단위).
+테스트는 DB·Ollama를 실제 호출하지 않는다. DB 풀의 동시 초기화와 rollback, 설정 검증, 문서 처리·임베딩 계약, 배포 스크립트를 검증하며 실제 모델 품질·GPU 동작은 별도 통합 검증 대상이다.
 
 ## 검증 절차
 
@@ -120,7 +116,7 @@ export RAG_SERVICE_URL="http://203.252.168.117:8000"
 4. `POST /api/v1/chat/query` —
    - 규정에 있는 질문: 규정 근거 인용 답변 + `regulation_sources`
    - FAQ에만 있는 질문: "공식 규정 근거는 확인되지 않았으며..." 서두 확인
-   - 둘 다 없는 질문: "관련 규정을 찾을 수 없습니다." (LLM 미호출)
+   - 둘 다 없는 질문: "관련 내용을 찾을 수 없습니다." (LLM 미호출)
    - 응답 본문에 `CONFLICT:` 마커가 노출되지 않는지 확인
 5. CommuteMate(Spring) 연동: `RAG_SERVICE_URL=http://localhost:8000`로 Spring 기동 → FAQ 생성/수정/삭제가 `faq_chunks`에 반영되는지, RAG 중단 상태에서 FAQ 검색이 키워드 검색으로 폴백하는지 확인
 
@@ -128,4 +124,4 @@ export RAG_SERVICE_URL="http://203.252.168.117:8000"
 
 - 첫 검색 요청 시 재정렬 모델(bge-reranker-v2-m3) 로딩으로 수십 초 지연될 수 있다 (이후 캐시).
 - 임베딩 모델을 바꾸면 규정·FAQ 데이터 전체 재임베딩(재인제스트 + FAQ 백필)이 필요하다.
-- `MIN_RELEVANCE_SCORE`(기본 0.0)는 재정렬 raw logit 기준 임계값 — 모델 교체 시 재조정 필요.
+- `MIN_RELEVANCE_SCORE`(기본 -1.0)는 재정렬 raw logit 기준 임계값 — 모델 교체 시 재조정 필요.

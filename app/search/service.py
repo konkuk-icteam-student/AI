@@ -580,7 +580,7 @@ def print_search_results(
 
 def main() -> None:
     """
-    rag.py 단독 테스트
+    python -m app.search.service로 실행하는 규정 검색 테스트
     """
 
     print("=" * 60)

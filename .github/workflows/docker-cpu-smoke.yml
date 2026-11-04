@@ -1,0 +1,35 @@
+name: Docker CPU image smoke test
+
+on:
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - Dockerfile
+      - requirements.txt
+      - .github/workflows/docker-cpu-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-image:
+    name: Build and validate CPU-only image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image without pushing or deploying
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ai-cpu-smoke:pr
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify CPU dependencies and reranker import
+        run: |
+          docker run --rm --entrypoint python ai-cpu-smoke:pr -c 'import torch, paddle, transformers; from app.search.reranker import rerank; assert torch.version.cuda is None; assert rerank("test", []) == []; print("Torch:", torch.__version__, "CUDA:", torch.version.cuda, "Paddle:", paddle.__version__)'
+          docker image inspect ai-cpu-smoke:pr --format 'Image bytes: {{.Size}}'

@@ -13,3 +13,7 @@ storage/**
 !storage/prod/
 !storage/prod/documents/
 !storage/prod/documents/.gitkeep
+
+# Local RAG evaluation outputs: persist on the server, never commit responses.
+rag_evaluation/results/*
+!rag_evaluation/results/.gitkeep

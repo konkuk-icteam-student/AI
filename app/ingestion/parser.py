@@ -4,8 +4,6 @@ from pathlib import Path
 
 import pymupdf
 
-from app.ingestion.ocr import ocr_pdf_page
-
 
 def normalize_direct_text(text: str) -> str:
     """
@@ -18,10 +16,7 @@ def normalize_direct_text(text: str) -> str:
     if not text:
         return ""
 
-    lines = [
-        " ".join(line.split()).strip()
-        for line in text.splitlines()
-    ]
+    lines = [" ".join(line.split()).strip() for line in text.splitlines()]
     return "\n".join(line for line in lines if line)
 
 
@@ -57,6 +52,8 @@ def extract_page_text(
         return normalize_direct_text(raw_text), "text"
 
     if extraction_mode == "ocr":
+        from app.ingestion.ocr import ocr_pdf_page
+
         ocr_text = ocr_pdf_page(page)
         return normalize_ocr_text(ocr_text), "ocr"
 
@@ -77,9 +74,7 @@ def extract_pdf_pages(
     documents/image_pdf의 파일은 extraction_mode="ocr"로 호출한다.
     """
     if extraction_mode not in {"text", "ocr"}:
-        raise ValueError(
-            "extraction_mode은 'text' 또는 'ocr'이어야 합니다."
-        )
+        raise ValueError("extraction_mode은 'text' 또는 'ocr'이어야 합니다.")
 
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF 파일이 없습니다: {pdf_path}")

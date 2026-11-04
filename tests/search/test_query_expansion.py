@@ -7,6 +7,34 @@ from app.search.query_expansion import expand_regulation_query
 
 
 class QueryExpansionTest(unittest.TestCase):
+    def test_rejects_invalid_rules_before_search(self):
+        for overrides in (
+            {"match": "alll"},
+            {"match": None},
+            {"keywords": []},
+            {"expansions": []},
+        ):
+            with self.subTest(
+                overrides=overrides
+            ), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "rules.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "rules": [
+                                {
+                                    "keywords": ["휴학"],
+                                    "expansions": ["학적 변동"],
+                                    **overrides,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(RuntimeError):
+                    expand_regulation_query("휴학", path=path)
+
     def test_reads_rules_from_json(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rules.json"

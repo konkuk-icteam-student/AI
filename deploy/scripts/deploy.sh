@@ -29,7 +29,7 @@ chmod 755 "${storage_dir}" "${storage_dir}/text_pdf" "${storage_dir}/image_pdf" 
 if [[ ! -f "${env_file}" ]]; then
     cp "${repository_root}/deploy/${environment}/.env.example" "${env_file}"
     chmod 600 "${env_file}"
-    echo "Created ${env_file}. Set a secure POSTGRES_PASSWORD and run deployment again." >&2
+    echo "Created ${env_file}. Set DATABASE_URL and OLLAMA_BASE_URL before deployment." >&2
     exit 1
 fi
 
@@ -41,21 +41,19 @@ set +a
 
 if [[ "${environment}" == staging ]]; then
     api_port="${API_PORT:-18000}"
-    postgres_port="${POSTGRES_PORT:-15433}"
 else
     api_port="${API_PORT:-8000}"
-    postgres_port="${POSTGRES_PORT:-25433}"
 fi
-if [[ ! "${POSTGRES_PASSWORD:-}" =~ ^[A-Za-z0-9]{32,}$ ]]; then
-    echo "Use a long alphanumeric POSTGRES_PASSWORD; prepare-env.sh generates a URL-safe password." >&2
-    exit 1
-fi
-for port in "${api_port}" "${postgres_port}"; do
-    if [[ ! "${port}" =~ ^[0-9]{1,5}$ ]] || (( 10#${port} < 1 || 10#${port} > 65535 )); then
-        echo "API_PORT and POSTGRES_PORT must be valid TCP ports." >&2
+for variable in DATABASE_URL OLLAMA_BASE_URL; do
+    if [[ -z "${!variable:-}" ]]; then
+        echo "Missing required configuration: ${variable}" >&2
         exit 1
     fi
 done
+if [[ ! "${api_port}" =~ ^[0-9]{1,5}$ ]] || (( 10#${api_port} < 1 || 10#${api_port} > 65535 )); then
+    echo "API_PORT must be a valid TCP port." >&2
+    exit 1
+fi
 if [[ "${API_BIND_ADDRESS:-127.0.0.1}" != 127.0.0.1 ]]; then
     echo "This shared-server deployment binds the AI API to 127.0.0.1." >&2
     exit 1
@@ -118,7 +116,15 @@ verify_deployment() {
         echo "The running API image does not match the requested release." >&2
         return 1
     fi
-    bash "${repository_root}/deploy/scripts/health-check.sh" "http://127.0.0.1:${api_port}/health" 30
+    # The API stays inside the Docker network. The host has no published API port.
+    # Compose --wait already waits for the container HEALTHCHECK to become healthy.
+    local health_status
+    health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "${container_id}")" || return 1
+    if [[ "${health_status}" != healthy ]]; then
+        echo "API container health check failed (status: ${health_status})." >&2
+        return 1
+    fi
+    echo "Health check passed: ${environment} API container ${container_id}"
 }
 
 rollback() {
@@ -139,7 +145,15 @@ if compose "${image_tag}" pull \
     && verify_deployment "${image_tag}"; then
     printf '%s\n' "${image_tag}" > "${current_image_file}"
     write_deployment_env "${image_tag}"
+    if [[ -n "${previous_image}" && "${previous_image}" != "${image_tag}" ]]; then
+        printf '%s\n' "${previous_image}" > "${runtime_dir}/.previous-image"
+    fi
     echo "Deployment completed: ${environment} ${image_tag}"
+    # Cleanup is best-effort; never fail a healthy deployment due to pruning.
+    if ! IMAGE_REPOSITORY="${image_repository}" DEPLOY_ROOT="${deploy_root}" \
+        bash "${repository_root}/deploy/scripts/cleanup-images.sh" --apply; then
+        echo "WARNING: AI image cleanup failed; deployment remains successful." >&2
+    fi
 else
     echo "Deployment failed: ${environment} ${image_tag}" >&2
     rollback || true
