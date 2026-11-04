@@ -115,6 +115,28 @@ done
             env_file.write("OLLAMA_BASE_URL=http://127.0.0.1:11434\n")
         return runtime
 
+    def test_production_requires_dedicated_database_credentials(self):
+        result = self.run_script("prepare-env.sh", "prod")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = self.runtime / "prod"
+        with (runtime / ".env").open("a") as env_file:
+            env_file.write(
+                "\\nDATABASE_URL='postgresql://chatbot_prod:test@postgres:5432/chatbot_prod'\\n"
+            )
+            env_file.write("OLLAMA_BASE_URL=http://127.0.0.1:11434\\n")
+        result = self.run_script("deploy.sh", "prod", IMAGE, NEW_TAG)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("POSTGRES_DB", result.stderr)
+        self.assertFalse(self.log.exists())
+
+        with (runtime / ".env").open("a") as env_file:
+            env_file.write("POSTGRES_DB=chatbot_prod\\n")
+            env_file.write("POSTGRES_USER=chatbot_prod\\n")
+            env_file.write("POSTGRES_PASSWORD=strong-test-password\\n")
+        result = self.run_script("deploy.sh", "prod", IMAGE, NEW_TAG)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((runtime / ".current-image").read_text().strip(), NEW_TAG)
+
     def test_preparation_preserves_external_database_configuration(self):
         runtime = self.prepare()
         env_file = runtime / ".env"
