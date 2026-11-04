@@ -73,7 +73,7 @@ LLM_MODEL=qwen3:8b
 ```
 
 - DB 호스트 `postgres`는 **Production Compose 내부 서비스명**이다. 외부 IP나 staging DB 호스트를 넣지 않는다.
-- `OLLAMA_BASE_URL`은 **API 컨테이너에서 접근 가능한 호스트 주소**여야 한다. 컨테이너의 `127.0.0.1`은 호스트 Ollama가 아니다. 서버의 staging 배포에 사용 중인 실제 호스트 연결 주소를 검증해 사용할 수 있다.
+- `OLLAMA_BASE_URL`은 **API 컨테이너에서 접근 가능한 호스트 주소**여야 한다. 컨테이너의 `127.0.0.1`은 호스트 Ollama가 아니다. Production Compose는 `host.docker.internal:host-gateway`를 매핑하므로 `http://host.docker.internal:11434`를 사용할 수 있다. 이 경우 서버 측 Ollama 사전 점검은 `http://127.0.0.1:11434`로 수행한다. Ollama가 Docker bridge에서 접근할 수 있는 인터페이스에 수신 중인지 실제 요청으로 확인한다.
 - DB 비밀번호는 커밋/로그/대화창에 올리지 않는다. `.env`는 `chmod 600 /opt/chatbot-service/prod/.env`로 관리한다.
 - 기존 production DB가 이미 있다면 새 named volume으로 마이그레이션하는 변경이므로 **자동 전환하지 말고 백업과 데이터 이전을 먼저 검토**한다.
 - CI/CD가 Production을 배포하면 `postgres`가 먼저 시작되며 healthcheck에 통과해야 API가 시작된다. 최초 빈 DB에는 pgvector 스키마만 생성되므로 **규정 PDF 청크를 자동으로 채우지는 않는다**. 데이터 인제스트는 데이터 백업·원본 검증 후 별도 실행한다.
