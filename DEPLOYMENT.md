@@ -19,7 +19,7 @@
 
 ## 2. 현재 컨테이너·DB 구성
 
-`deploy/staging/compose.yaml`과 `deploy/prod/compose.yaml`에는 API 서비스만 있다. `network_mode`를 생략하므로 각 Compose 프로젝트의 기본 bridge 네트워크를 사용한다. PostgreSQL은 이 Compose가 생성·관리하지 않는다. 챗봇 전용 외부 PostgreSQL/pgvector DB에 `DATABASE_URL`로 연결하며 업무일지 DB로 데이터를 이전하지 않는다.
+`deploy/staging/compose.yaml`은 기존 API 구성을 유지하고, `deploy/prod/compose.yaml`은 **API + 독립 PostgreSQL(pgvector:pg17)**을 함께 실행한다. 각 Compose 프로젝트는 별도의 기본 bridge 네트워크를 사용한다. Production DB는 `chatbot-production_postgres_data` Docker named volume에 영구 저장하며 호스트에 DB 포트를 공개하지 않는다. Staging DB나 업무일지 DB에는 연결하지 않는다.
 
 | 환경 | Compose 프로젝트 | API 컨테이너 포트 기본값 |
 |---|---|---|
@@ -42,6 +42,52 @@ OLLAMA_BASE_URL='http://HOST_REACHABLE_FROM_API:11434'
 - staging과 production의 네트워크 이름과 DB 연결은 실제 서버에서 각각 확인한다. 이 문서나 단위 테스트 통과만으로 운영 연결이 검증된 것은 아니다.
 
 API는 `app` 사용자로 실행한다. 문서는 읽기 전용 마운트, Hugging Face 캐시는 `model-cache`, PaddleX OCR 캐시는 `ocr-cache` 볼륨으로 보관한다. 기존 마운트와 챗봇 DB 네트워크를 보존해야 한다. 모델 초기 로딩과 OCR은 `/health` 검사에 포함되지 않는다.
+
+### Production PostgreSQL 최초 설정 (운영 서버)
+
+Production은 `/opt/chatbot-service/prod/.env`가 이미 존재해야 배포를 시작할 수 있다. 최초 준비 시 아래 명령어를 서버에서 실행한다.
+
+```bash
+bash deploy/scripts/prepare-env.sh prod
+```
+
+서버에 Git checkout이 없으면 GitHub의 `main`에서 스크립트를 다운로드해 실행해도 된다. **이미 생성된 .env는 덮어쓰지 않는다.** 기존에 생성한 파일에는 다음 세 변수를 직접 추가한다.
+
+```bash
+openssl rand -hex 24           # 별도 강력한 Production DB 비밀번호 생성
+nano /opt/chatbot-service/prod/.env
+```
+
+설정 예시(비밀번호는 위 명령으로 생성한 값으로 **두 곳 모두 동일하게 치환**):
+
+```dotenv
+POSTGRES_DB=chatbot_prod
+POSTGRES_USER=chatbot_prod
+POSTGRES_PASSWORD='GENERATED_HEX_PASSWORD'
+DATABASE_URL='postgresql://chatbot_prod:GENERATED_HEX_PASSWORD@postgres:5432/chatbot_prod'
+API_BIND_ADDRESS=127.0.0.1
+API_PORT=8000
+OLLAMA_BASE_URL='http://CONTAINER_REACHABLE_OLLAMA_HOST:11434'
+EMBEDDING_MODEL=qwen3-embedding:0.6b
+LLM_MODEL=qwen3:8b
+```
+
+- DB 호스트 `postgres`는 **Production Compose 내부 서비스명**이다. 외부 IP나 staging DB 호스트를 넣지 않는다.
+- `OLLAMA_BASE_URL`은 **API 컨테이너에서 접근 가능한 호스트 주소**여야 한다. 컨테이너의 `127.0.0.1`은 호스트 Ollama가 아니다. Production Compose는 `host.docker.internal:host-gateway`를 매핑하므로 `http://host.docker.internal:11434`를 사용할 수 있다. 이 경우 서버 측 Ollama 사전 점검은 `http://127.0.0.1:11434`로 수행한다. Ollama가 Docker bridge에서 접근할 수 있는 인터페이스에 수신 중인지 실제 요청으로 확인한다.
+- DB 비밀번호는 커밋/로그/대화창에 올리지 않는다. `.env`는 `chmod 600 /opt/chatbot-service/prod/.env`로 관리한다.
+- 기존 production DB가 이미 있다면 새 named volume으로 마이그레이션하는 변경이므로 **자동 전환하지 말고 백업과 데이터 이전을 먼저 검토**한다.
+- CI/CD가 Production을 배포하면 `postgres`가 먼저 시작되며 healthcheck에 통과해야 API가 시작된다. 최초 빈 DB에는 pgvector 스키마만 생성되므로 **규정 PDF 청크를 자동으로 채우지는 않는다**. 데이터 인제스트는 데이터 백업·원본 검증 후 별도 실행한다.
+- DB 컨테이너/볼륨은 `docker compose down -v`나 `docker volume prune`으로 삭제하지 않는다.
+- Prod DB는 외부 포트를 publish하지 않는다. staging 프로젝트 네트워크·DB·Docker 볼륨은 변경하지 않는다.
+
+배포 확인 (배포 성공 후):
+
+```bash
+docker ps --filter name=chatbot-production
+docker inspect chatbot-production-postgres --format '{{range $name, $net := .NetworkSettings.Networks}}{{println $name}}{{end}}'
+cd /opt/chatbot-service/prod
+docker compose --env-file .env --env-file .deployment.env -f compose.yaml ps
+```
 
 ## 3. GitHub 설정
 
