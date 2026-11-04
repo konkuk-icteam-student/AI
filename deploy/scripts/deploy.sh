@@ -66,8 +66,14 @@ if [[ "${API_BIND_ADDRESS:-127.0.0.1}" != 127.0.0.1 ]]; then
 fi
 
 ollama_url="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-curl --fail --silent --show-error --max-time 10 "${ollama_url}/api/tags" > /dev/null
-available_models="$(OLLAMA_HOST="${ollama_url}" ollama list)"
+# host.docker.internal resolves inside Docker via extra_hosts, but typically not
+# in the host shell running deployment preflight. Check local Ollama on the host.
+ollama_preflight_url="${ollama_url}"
+if [[ "${ollama_url}" == "http://host.docker.internal:11434" ]]; then
+    ollama_preflight_url="http://127.0.0.1:11434"
+fi
+curl --fail --silent --show-error --max-time 10 "${ollama_preflight_url}/api/tags" > /dev/null
+available_models="$(OLLAMA_HOST="${ollama_preflight_url}" ollama list)"
 for required_model in "${EMBEDDING_MODEL:-qwen3-embedding:0.6b}" "${LLM_MODEL:-qwen3:8b}"; do
     model_found=false
     while read -r model_name rest; do
