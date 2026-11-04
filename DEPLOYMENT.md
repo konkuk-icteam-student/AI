@@ -126,6 +126,34 @@ PDF, 실제 `.env`, 개인키는 이 압축 파일에 포함하지 않는다. �
 
 동시 배포는 환경별 하나만 실행한다. 진행 중 배포를 새 실행 때문에 취소하지 않는다. 기본 브랜치에 workflow가 없는 동안은 새로운 `workflow_dispatch`를 시작할 수 없으므로 develop push 또는 준비한 검증 브랜치 trigger를 사용한다. 기능 PR을 develop에 병합하면 staging 배포가 시작된다.
 
+## 서버 소스 체크아웃 자동 동기화 (RAG 일괄 테스트)
+
+`develop` push가 성공적으로 staging에 배포되면 SSH 배포 사용자 (`DEPLOY_USER=kuai`)의 `$HOME/chatbot/staging`에 `develop` 브랜치 소스를 동기화한다. `main` push로 production이 성공적으로 배포되면 `$HOME/chatbot/prod`에 `main` 소스를 동기화한다.
+
+```text
+/home/kuai/chatbot/
+├── staging/   # develop: scripts/, rag_evaluation/questions/, results/ ...
+└── prod/      # main: scripts/, rag_evaluation/questions/, results/ ...
+```
+
+- 최초 배포: 대상 폴더가 비어 있으면 공개 GitHub 저장소를 해당 브랜치로 clone한다. 서버의 `git`과 github.com으로의 HTTPS 연결이 필요하다.
+- 이후 배포: origin과 브랜치를 검증하고 `git fetch` + fast-forward 병합으로 **검증된 Docker 이미지와 동일한 커밋 SHA**까지 갱신한다.
+- 추적 파일에 로컬 수정이 있거나 기존 폴더가 비어 있지 않은 비-Git 폴더라면 안전을 위해 동기화를 중단한다. 기존 데이터를 지우거나 `git reset --hard`로 덮어쓰지 않는다(최초 빈 폴더 clone 직후의 SHA 고정은 예외).
+- `rag_evaluation/results/`에서 생성되는 결과는 Git 무시 대상이므로 push되지 않고 서버에 유지된다. 원본 질문 CSV는 Git으로 버전 관리한다.
+- 소스 체크아웃 동기화는 **기존 /opt/chatbot-service Docker 배포가 건강 상태 검증을 통과한 다음에** 실행한다. 코드 복제본은 실행 중인 Docker 마운트나 DB와 분리된다.
+- Docker가 정상 배포되어도 Git 네트워크/권한 문제로 소스 동기화가 실패하면 workflow는 실패를 표시하지만, 이미 검증된 컨테이너를 롤백하거나 자동 중지하지 않는다. 원인 해결 후 재실행한다.
+
+배포 후 호스트에서 테스트:
+
+```bash
+cd ~/chatbot/staging
+python3 scripts/run_rag_batch.py --limit 3
+ls -lh rag_evaluation/results/
+git branch --show-current   # develop
+```
+
+**주의:** staging/prod Docker 배포는 기존 `/opt/chatbot-service`를 계속 사용한다. `~/chatbot/staging`, `~/chatbot/prod`는 테스트·소스 확인용 디렉터리이며 Git push만으로 질의가 자동 실행되지는 않는다.
+
 ## 6. 상태 확인
 
 배포 성공 후 서버의 해당 환경 디렉터리에서 실행한다.
