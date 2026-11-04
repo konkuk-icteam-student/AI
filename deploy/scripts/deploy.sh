@@ -44,7 +44,13 @@ if [[ "${environment}" == staging ]]; then
 else
     api_port="${API_PORT:-8000}"
 fi
-for variable in DATABASE_URL OLLAMA_BASE_URL; do
+# Production Compose also creates an isolated PostgreSQL database.
+# Fail before pulling/restarting anything when the server's private .env is incomplete.
+required_variables=(DATABASE_URL OLLAMA_BASE_URL)
+if [[ "${environment}" == prod ]]; then
+    required_variables+=(POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD)
+fi
+for variable in "${required_variables[@]}"; do
     if [[ -z "${!variable:-}" ]]; then
         echo "Missing required configuration: ${variable}" >&2
         exit 1
