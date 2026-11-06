@@ -1,130 +1,183 @@
-# 규정 RAG 질문 일괄 테스트
+# RAG 질문 CSV 일괄 테스트 및 결과 게시
 
-이 디렉터리는 RAG 검증용 질문지와 실행 결과를 분리해 저장합니다. DB를 수정하지 않습니다.
+GitHub `develop`에 질문 CSV를 올리고 서버 Staging 챗봇으로 실행한 뒤, **답변 CSV를 생성하고 결과 전용 GitHub 브랜치에 게시**하는 절차입니다.
+
+## 1. 입력 파일 준비
+
+**GitHub 업로드 경로:** `rag_evaluation/questions/`
 
 ```text
 rag_evaluation/
-├── questions/  # 입력 CSV (날짜·시간을 포함한 파일명)
-└── results/    # 답변 CSV, 원본 JSONL, 상태 요약 JSON
-scripts/run_rag_batch.py  # 일괄 실행 스크립트
+├── questions/
+│   └── scholarship_questions.csv   # 입력
+└── results/                      # 서버가 생성하는 결과 (Git 추적 제외)
 ```
 
-## 질문 CSV
+CSV 인코딩은 UTF-8 또는 UTF-8 BOM을 사용합니다.
 
-- 필수 열: `질문`
-- 선택 열: `ID`, `분류`, `기대 정답 / 기대 응답`, `근거 규정`, `근거 조항` 등
-- 인코딩: UTF-8 또는 UTF-8 BOM (`utf-8-sig`). 질문지의 나머지 열도 결과 CSV에 유지합니다.
-- **AI 요청에는 `질문`만 전달합니다.** 기대 정답과 판정 기준은 전달하지 않습니다.
-- 새 질문지는 `questions/YYYYMMDD_HHMMSS_설명.csv` 형식의 이름을 권장합니다.
+| ID | 질문 | 분류 | 기대 정답 |
+|---|---|---|---|
+| A001 | 지급할 수 있는 장학금 종류는? | 장학금 | 검토용 참고 답변 |
+| A002 | 장학금 지급 기준은? | 장학금 | 검토용 참고 답변 |
 
-## 서버에서 실행
+- 필수 열은 **`질문`**이며 빈 질문은 오류 상태로 남습니다.
+- `ID`와 나머지 열은 선택 사항입니다. `ID`를 사용한다면 중복·공백 ID를 만들지 마세요.
+- 챗봇에 전달되는 데이터는 **`질문` 열뿐**입니다. 기존 열은 결과 CSV에도 유지됩니다.
+- 파일명에는 용도와 날짜를 사용하면 결과를 구분하기 쉽습니다.
+- **공개 GitHub 저장소에는 개인정보·사내 비밀·접근 토큰을 포함하지 않습니다.**
 
-`develop` 배포가 성공하면 `/home/kuai/chatbot/staging`에 이 저장소가 자동으로 동기화됩니다. `main` 배포가 성공하면 `/home/kuai/chatbot/prod`에 동기화됩니다. 두 폴더는 Git 브랜치를 추적하며 결과 파일은 유지합니다. Docker 배포 경로 `/opt/chatbot-service`와는 별개입니다.
+## 2. GitHub에서 서버로 질문 CSV 반영
 
-Python 3.6 이상, Docker CLI, 실행 중인 RAG 컨테이너의 `curl`이 필요합니다. **호스트 서버**에서 실행하므로 외부 포트를 공개할 필요가 없습니다.
+1. [AI 저장소](https://github.com/konkuk-icteam-student/AI)에서 브랜치를 `develop`으로 선택합니다.
+2. `rag_evaluation/questions/` 폴더에 CSV를 업로드합니다.
+3. 저장소 규칙에 따라 Commit 또는 PR을 통해 `develop`에 변경을 반영합니다.
+4. [GitHub Actions](https://github.com/konkuk-icteam-student/AI/actions)의 **Sync staging documentation and question CSVs** 성공을 확인합니다.
+5. 서버의 `~/chatbot/staging/rag_evaluation/questions/`에 파일이 생겼는지 확인합니다.
+
+`develop` 변경이 **문서·질문 CSV에만 한정**되면 Docker 재빌드 없이 Git 체크아웃만 동기화됩니다. Python·설정 파일 등이 함께 변경되면 **Deploy staging**이 이미지를 빌드하고 배포 완료 후 소스를 동기화합니다.
 
 ```bash
-# staging 서버에서 소스 브랜치 확인
 cd ~/chatbot/staging
-git branch --show-current  # develop
-# 질문 CSV 중 3문항만 먼저 테스트
-python3 scripts/run_rag_batch.py --input rag_evaluation/questions/20261104_161326_regulations_1-0-1_1-0-9.csv --limit 3
-
-# questions/ 폴더의 모든 CSV 전체 실행
-python3 scripts/run_rag_batch.py
-
-# 중단된 실행 이어하기 (처음 출력된 run-id 입력)
-python3 scripts/run_rag_batch.py --run-id 20261104_154500
-
-# 컨테이너/컨테이너 내부 API 주소 변경
-python3 scripts/run_rag_batch.py --container chatbot-staging-api-1 --url http://127.0.0.1:18000/api/v1/chat/query
+git branch --show-current       # develop
+ls -lh rag_evaluation/questions/
 ```
 
-기본 API는 `chatbot-staging-api-1` 컨테이너의 `http://127.0.0.1:18000/api/v1/chat/query`입니다.
-새 실행 시 `Asia/Seoul`의 현재 시각을 사용한 실행 ID (`YYYYMMDD_HHMMSS`)가 생성됩니다.
+**중요:** CSV 업로드/서버 소스 동기화는 질문 실행을 시작하지 않습니다. 아래 명령어를 서버에서 직접 실행해야 합니다.
 
-## 결과 파일
+## 3. 질문 수행과 답변 CSV 생성
 
-입력 파일당 `rag_evaluation/results/`에 다음 세 파일이 생성됩니다.
+서버 `kuai` 계정, Python 3.6 이상, Docker CLI와 정상 실행 중인 `chatbot-staging-api-1` 컨테이너가 필요합니다. 포트를 호스트에 공개할 필요는 없습니다.
 
-- `YYYYMMDD_HHMMSS_질문파일명_answers.csv` — 원본 열 + AI 답변·규정 출처·FAQ 출처·응답시간·상태
-- `YYYYMMDD_HHMMSS_질문파일명_raw.jsonl` — 요청별 원본 JSON 응답 (진행 중에도 기록)
-- `YYYYMMDD_HHMMSS_질문파일명_summary.json` — 성공·미처리·오류 상태별 개수
+**특정 CSV 3문항 시험 실행:**
 
-`--limit 3` 이후 **같은 결과 파일에 이어서 실행**하려면 첫 실행의 `--run-id`를 재사용하세요. 성공 처리된 ID/질문은 재실행 시 건너뜁니다. 기본 실행은 항상 새 결과 파일을 만듭니다.
+```bash
+cd ~/chatbot/staging
+python3 scripts/run_rag_batch.py \
+  --input rag_evaluation/questions/scholarship_questions.csv \
+  --limit 3
+```
 
-응답의 정답 여부는 자동 채점하지 않습니다. 기본 실행은 서버에만 저장되며, `--publish-results`를 지정하면 완료된 답변 CSV를 GitHub 결과 브랜치에 업로드합니다. 공개 전 데이터의 민감정보를 확인하세요.
+**특정 CSV의 모든 문항 실행:**
 
-## 완료된 답변 CSV를 GitHub에 자동 Push
+```bash
+python3 scripts/run_rag_batch.py \
+  --input rag_evaluation/questions/scholarship_questions.csv
+```
 
-**배포를 재실행하지 않도록** CSV 결과는 코드 브랜치(develop/main)가 아니라
-`rag-results/staging` 또는 `rag-results/prod` 브랜치로만 업로드합니다.
-업로드되는 것은 *모든 질문에 HTTP 200으로 답변한* `*_answers.csv` 파일뿐입니다.
-미완료(--limit 3 포함), 요청 실패가 남은 CSV, 원본 JSONL, 요약 JSON은 업로드하지 않습니다.
-결과 업로드로 Docker CI/CD가 다시 시작되지 않습니다.
+**`questions/`에 있는 모든 CSV 일괄 실행:**
 
-**주의: 이 저장소는 공개 저장소입니다.** GitHub에 Push된 질문/AI 답변/출처는
-누구나 열람할 수 있습니다. 비공개 정보가 섞인 결과는 업로드하지 마세요.
+```bash
+python3 scripts/run_rag_batch.py
+```
 
-### 처음 한 번: 서버에서 쓰기 전용 배포 키 준비
+`--input` 없이 실행하면 `rag_evaluation/questions/*.csv`를 파일명 순서대로 모두 처리합니다. 각 질문은 아래 경로로 전송됩니다.
 
-기존 CI/CD가 서버에 접속하는 SSH 키와 **별개**로, 결과 Push용 GitHub
-Deploy Key를 만들어 사용합니다. 개인키를 GitHub 저장소나 대화에 붙여 넣지 않습니다.
+```text
+run_rag_batch.py
+  → docker exec -i chatbot-staging-api-1 curl
+  → POST http://127.0.0.1:18000/api/v1/chat/query
+  → RAG 검색 + LLM 답변
+  → 결과 저장
+```
+
+**질문 실행과 답변 CSV 생성은 동일 명령어(`run_rag_batch.py`)에서 수행됩니다.** 별도의 답변 생성 명령은 없습니다.
+
+실행 ID는 한국 시간 기준 `YYYYMMDD_HHMMSS`입니다. `--limit 3` 실행에서는 나머지 문항이 `NOT_RUN`으로 기록됩니다. 중단한 결과를 이어서 처리하려면 같은 ID를 지정합니다.
+
+```bash
+python3 scripts/run_rag_batch.py \
+  --input rag_evaluation/questions/scholarship_questions.csv \
+  --run-id YYYYMMDD_HHMMSS
+```
+
+실제 실행 ID로 `YYYYMMDD_HHMMSS`를 교체하세요. 같은 질문/ID가 `OK`인 경우 다시 실행하지 않습니다. ID를 생략하면 새로운 결과 파일을 생성합니다.
+
+## 4. 생성되는 결과 파일
+
+**서버 경로:** `/home/kuai/chatbot/staging/rag_evaluation/results/`
+
+입력 `scholarship_questions.csv`가 실행 ID `YYYYMMDD_HHMMSS`로 처리되면 다음 파일이 생성됩니다.
+
+| 파일명 | 역할 |
+|---|---|
+| `YYYYMMDD_HHMMSS_scholarship_questions_answers.csv` | **최종 검토용**: 원본 열 + AI 답변, 규정/FAQ 근거, 충돌 감지, 응답 시간, API/HTTP 상태, 오류, 처리 시각 |
+| `YYYYMMDD_HHMMSS_scholarship_questions_raw.jsonl` | 요청별 API 원본 응답을 누적 기록; 중단 후 이어하기에 사용 |
+| `YYYYMMDD_HHMMSS_scholarship_questions_summary.json` | 전체·성공·미처리 및 상태별 건수 |
+
+결과 CSV와 요약 파일은 질문을 처리할 때마다 갱신됩니다. `API 상태=OK`는 API가 정상 응답했다는 뜻이며 **답변의 사실적 정확성을 보증하지 않습니다.** 출처와 예상 답변을 별도 검토하세요.
+
+```bash
+# 최근 생성된 결과
+ls -lht rag_evaluation/results/
+
+# 해당 실행의 요약 확인 (실제 파일명으로 변경)
+cat rag_evaluation/results/*_summary.json
+```
+
+## 5. GitHub에 완성된 답변 CSV 게시
+
+코드 브랜치인 `develop`에 자동으로 결과를 Push하지 않습니다. **`rag-results/staging` 결과 전용 브랜치**로만 게시하므로 Docker 배포를 유발하지 않습니다.
+
+| 구분 | GitHub 브랜치 | 경로 |
+|---|---|---|
+| 질문 입력 | `develop` | `rag_evaluation/questions/` |
+| 성공적으로 완료된 답변 CSV | `rag-results/staging` | `rag_evaluation/results/staging/` |
+| Raw JSONL·요약 JSON·미완료 답변 | 자동 게시 안 함 | 서버 `rag_evaluation/results/`에 보관 |
+
+**기존 완성 결과 게시:**
+
+```bash
+# 업로드 대상 파일 확인
+python3 scripts/publish_rag_results.py --environment staging --dry-run
+
+# 실제 게시
+python3 scripts/publish_rag_results.py --environment staging
+```
+
+**다음부터 질문 실행·답변 저장·완성 결과 게시를 한 번에:**
+
+```bash
+python3 scripts/run_rag_batch.py --publish-results
+
+# 특정 입력 파일만 실행하고 완료 결과 게시
+python3 scripts/run_rag_batch.py \
+  --input rag_evaluation/questions/scholarship_questions.csv \
+  --publish-results
+```
+
+게시 도구는 해당 실행의 **모든 문항이 `OK`이고 미처리가 0개**일 때만 `*_answers.csv`를 게시합니다. 부분 실행·오류가 남은 파일은 올리지 않습니다. 게시 실패 시 서버 원본 파일은 유지되며 같은 명령으로 재시도할 수 있습니다.
+
+결과 위치: [GitHub RAG Staging 답변](https://github.com/konkuk-icteam-student/AI/tree/rag-results/staging/rag_evaluation/results/staging)
+
+### GitHub 게시용 SSH 인증 (서버 계정당 준비)
+
+질문 실행 자체에는 SSH 게시 키가 필요하지 않습니다. 결과 게시에는 **쓰기 권한이 있는 GitHub Deploy Key**가 필요합니다.
 
 ```bash
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
+# 이미 ai-rag-results 키가 있으면 다시 생성하지 마세요.
 ssh-keygen -t ed25519 -f ~/.ssh/ai-rag-results -N '' -C 'AI RAG results'
 chmod 600 ~/.ssh/ai-rag-results
+
+# GitHub Settings → Deploy keys에 .pub 파일 한 줄을 등록, Allow write access
 cat ~/.ssh/ai-rag-results.pub
-```
 
-출력된 **공개키(`*.pub`)만** GitHub
-**AI 저장소 → Settings → Deploy keys → Add deploy key**에 등록하고
-**Allow write access**를 켭니다. 이 키는 AI 저장소에만 Push할 수 있어야 합니다.
-
-다음으로 SSH 호스트 키를 확인한 뒤 GitHub 접속을 한 번 검증합니다.
-GitHub의 공식 SSH 호스트 키 지문과 화면에 표시된 지문이 일치할 때만 신뢰하세요.
-
-```bash
+# GitHub 공식 호스트 키를 확인해 known_hosts에 신뢰 등록한 뒤 인증 시험
 ssh -i ~/.ssh/ai-rag-results -o IdentitiesOnly=yes -T git@github.com
 ```
 
-GitHub의 "successfully authenticated" 문구가 보이면 권한 확인이 된 것입니다.
-서버의 `~/.ssh/known_hosts`에 GitHub의 검증된 호스트 키가 있어야
-업로드 도중 호스트 키 검증이 실패하지 않습니다.
+개인키(`~/.ssh/ai-rag-results`)는 절대로 공유하거나 Git에 커밋하지 않습니다. 이미 키를 등록했다면 생성 단계는 건너뜁니다.
 
-### 질문 테스트와 업로드를 한 번에
+## 6. 오류 확인
 
-```bash
-cd ~/chatbot/staging
-python3 scripts/run_rag_batch.py --publish-results
+| 상황 | 확인 |
+|---|---|
+| GitHub에 올렸으나 서버에 CSV가 없음 | `develop` 반영 여부 및 Actions 동기화/배포 성공 확인 |
+| `CSV에 질문 열이 없습니다` | 열 이름이 정확히 `질문`인지 확인 |
+| Docker/API 연결 오류 | `docker ps --filter name=chatbot-staging-api-1` 및 컨테이너 health 확인 |
+| `NOT_RUN` | `--limit` 사용 여부와 실행 ID 확인 |
+| 결과 게시 대상 없음 | `summary.json`에 `success=total`, `not_run=0`인지 확인 |
+| SSH 게시 오류 | Deploy Key 쓰기 권한, 개인키 경로·권한, GitHub 호스트 키 확인 |
 
-# 기존에 이미 완료된 결과 CSV만 Push (다시 질문하지 않음)
-python3 scripts/publish_rag_results.py --environment staging
-
-# 실제 업로드 전에 공개될 파일 목록만 미리 확인
-python3 scripts/publish_rag_results.py --environment staging --dry-run
-
-# 특정 테스트 실행만 게시
-python3 scripts/publish_rag_results.py --environment staging --run-id 20261104_165000
-```
-
-Production 결과라면 실행 인수에서 `--environment prod`를 사용합니다.
-API 테스트 실행과 연동할 때는 `--publish-environment prod`를 사용하세요.
-Staging/Production을 혼동하지 않도록 테스트 대상 컨테이너와 URL도 함께 확인해야 합니다.
-
-서버에서 결과 폴더는 여전히 Git 무시 대상이며, 업로드 코드는 임시 작업 폴더를
-사용해 결과 브랜치에 파일을 커밋합니다. **현재 develop/main 체크아웃을 변경하지 않습니다.**
-업로드가 실패해도 서버의 CSV는 삭제되지 않습니다. 같은 명령으로 재시도할 수 있으며
-이미 GitHub에 올라간 동일한 CSV는 중복 커밋하지 않습니다.
-
-GitHub 저장 위치:
-- `rag-results/staging` 브랜치 → `rag_evaluation/results/staging/*_answers.csv`
-- `rag-results/prod` 브랜치 → `rag_evaluation/results/prod/*_answers.csv`
-
-## 단위 테스트
-
-```bash
-python3 -m unittest tests.test_rag_batch_runner -v
-```
+자동 테스트는 `python3 -m unittest tests.test_rag_batch_runner tests.test_rag_results_publisher -v`로 실행할 수 있습니다.

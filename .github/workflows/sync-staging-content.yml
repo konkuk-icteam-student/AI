@@ -1,0 +1,75 @@
+name: Sync staging documentation and question CSVs
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - '**/*.md'
+      - 'rag_evaluation/questions/*.csv'
+      - 'rag_evaluation/questions/**/*.csv'
+
+permissions:
+  contents: read
+
+# Coordinate with the full Staging deployment so checkout and release cannot race.
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    name: Verify this push contains content-only changes
+    runs-on: ubuntu-latest
+    outputs:
+      content_only: ${{ steps.paths.outputs.content_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: paths
+        name: Check every changed path
+        shell: bash
+        env:
+          PREVIOUS_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          # New branch or invalid diff: never skip the full image deployment.
+          if [[ "$PREVIOUS_SHA" == "0000000000000000000000000000000000000000" ]] ||
+             ! git cat-file -e "$PREVIOUS_SHA^{commit}"; then
+            echo "content_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          any=false
+          only_content=true
+          while IFS= read -r -d '' changed_path; do
+            any=true
+            case "$changed_path" in
+              *.md|rag_evaluation/questions/*.csv) ;;
+              *) only_content=false ;;
+            esac
+          done < <(git diff --name-only -z "$PREVIOUS_SHA" "$CURRENT_SHA")
+          if [[ "$any" == true && "$only_content" == true ]]; then
+            echo "content_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "content_only=false" >> "$GITHUB_OUTPUT"
+            echo "Contains code/config changes; full deployment handles checkout."
+          fi
+
+  sync:
+    name: Update staging checkout, no Docker restart
+    needs: classify
+    if: needs.classify.outputs.content_only == 'true'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fast-forward only documentation and question CSVs
+        env:
+          DEPLOY_ROOT: ${{ vars.STAGING_DEPLOY_ROOT || '/opt/chatbot-service' }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: bash deploy/scripts/sync-content-only-ssh.sh "$GITHUB_SHA"

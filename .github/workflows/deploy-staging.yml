@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - develop
+    # When EVERY changed file is documentation or a question CSV, only sync
+    # the server checkout. Code + docs still triggers this full Docker rollout.
+    paths-ignore:
+      - '**/*.md'
+      - 'rag_evaluation/questions/*.csv'
+      - 'rag_evaluation/questions/**/*.csv'
   workflow_dispatch:
 
 permissions:
