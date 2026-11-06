@@ -56,7 +56,7 @@ def completed_csvs(results_dir, run_id=None):
                     summary.get('not_run') != 0 or
                     not csv_path.stat().st_size):
                 continue
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError):
             continue
         chosen.append(csv_path)
     return chosen
