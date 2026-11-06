@@ -1,204 +1,171 @@
-# SSH 기반 CI/CD 및 서버 운영
+# AI RAG CI/CD 및 서버 운영 가이드
 
-이 브랜치의 배포 코드는 GitHub-hosted runner에서 SSH로 서버에 접속한다. 서버에 GitHub runner를 설치하지 않는다. 기존 `self-hosted/linux/chatbot-deploy`를 기다리던 방식에서 전환한 구성이다.
+이 문서는 **현재 GitHub Actions + SSH + Docker Compose 배포 구조**의 운영 절차를 설명합니다. 과거 서버 이력이나 특정 장애 해결 로그는 포함하지 않습니다.
 
-2026-10-07 확인: `203.252.168.90:22`, 사용자 `kuai`로 GitHub Actions의 키 로그인과 Docker 조회가 [성공](https://github.com/konkuk-icteam-student/AI/actions/runs/37562035974)했다. 실제 AI 서비스 배포와 데이터 검증은 별도 단계다.
+- 서비스 기능과 로컬 실행: [README](README.md)
+- 질문 CSV 업로드·답변 생성·결과 게시: [RAG 운영 가이드](rag_evaluation/README.md)
+- 로컬/통합 검증: [TEST_MANUAL](TEST_MANUAL.md)
 
-## 1. 배포 흐름
+## 1. 브랜치와 CI/CD
 
 ```text
-기능 브랜치 → develop PR → CI/리뷰 → develop 병합
-→ 단위 테스트 → SHA 이미지 빌드/GHCR 업로드
-→ SSH로 같은 SHA의 배포 파일 전송 → 서버 GHCR 로그인
-→ staging Compose 실행 → 실행 이미지/health 확인
-→ staging 실제 질의 검증 → develop → main PR
-→ main 병합 → production 이미지 빌드/SSH 배포
+feature/* → PR develop → CI → Merge
+                         ├─ 코드/설정 변경 → 이미지 빌드 → GHCR → SSH/Compose Staging 배포
+                         └─ .md·질문 CSV만 변경 → SSH/Git 소스 동기화 (Docker 재시작 없음)
+
+develop → PR main → CI → Merge → 이미지 빌드 → GHCR → SSH/Compose Production 배포
+
+rag-results/staging → 결과 CSV 보관 (Docker 배포 트리거 없음)
 ```
 
-`main` 대상 PR의 출발 브랜치는 `develop`으로 제한한다. branch ruleset에 PR·리뷰·필수 CI·force push 제한을 적용해야 실제 병합 정책이 강제된다. CI에는 브랜치 정책, Python/셸 문법, 단위 테스트, staging/prod Compose 설정 검사가 있다.
-
-## 2. 현재 컨테이너·DB 구성
-
-`deploy/staging/compose.yaml`과 `deploy/prod/compose.yaml`에는 API 서비스만 있다. `network_mode`를 생략하므로 각 Compose 프로젝트의 기본 bridge 네트워크를 사용한다. PostgreSQL은 이 Compose가 생성·관리하지 않는다. 챗봇 전용 외부 PostgreSQL/pgvector DB에 `DATABASE_URL`로 연결하며 업무일지 DB로 데이터를 이전하지 않는다.
-
-| 환경 | Compose 프로젝트 | API 컨테이너 포트 기본값 |
+| 워크플로 | 트리거 | 기능 |
 |---|---|---|
-| staging | chatbot-staging | 18000 |
-| production (`prod`) | chatbot-production | 8000 |
+| `ci.yml` | `develop` / `main` 대상 PR | 브랜치 정책, 문법, 테스트, Compose 검증 |
+| `deploy-staging.yml` | `develop`의 코드/설정 변경, 수동 실행 | 이미지 빌드·배포 후 소스 체크아웃 동기화 |
+| `sync-staging-content.yml` | `develop`의 문서·질문 CSV 변경 | 내용 전용 변경이면 서버 Git 체크아웃만 갱신 |
+| `deploy-production.yml` | `main` Push, 수동 실행 | Production 이미지 빌드·배포 |
+| `update-regulations.yml` | 예약/수동 실행 | 규정 PDF 변경을 PR로 제출 (인덱싱은 별개) |
+| `sync-main-to-develop.yml` | `main` Push | 필요할 때 `develop` 역동기화 PR 생성 |
 
-서버 `.env`에는 다음 값을 직접 설정한다. URL에 들어가는 비밀번호의 특수문자는 URL 인코딩하고, 셸로 읽을 때 값이 변하지 않도록 전체 URL을 작은따옴표로 감싼다.
+기타 점검용 워크플로는 `.github/workflows/`를 참조합니다. `main` 대상 PR은 `develop`에서 생성하도록 CI에서 검사합니다. 실제 브랜치 보호는 저장소 ruleset도 함께 설정해야 합니다.
+
+### Staging에서 Docker 배포를 생략하는 조건
+
+다음 파일 **만** 변경된 Push는 서버의 `~/chatbot/staging` 소스를 fast-forward하며 Docker 컨테이너를 수정하지 않습니다.
+
+- Markdown: `**/*.md`
+- 질문 CSV: `rag_evaluation/questions/*.csv` 및 하위 디렉터리의 CSV
+
+Python, Dockerfile, Compose, workflow, 프롬프트 등 다른 파일의 변경이 **하나라도 포함되면 일반 Docker 배포**로 처리합니다.
+
+소스 전용 동기화는 `.current-image`에 기록된 실행 중 이미지의 커밋과 목표 커밋을 비교합니다. 중간에 코드 변경이 발견되면 동기화를 중지합니다. 전체 배포와 같은 서버 잠금을 사용해 동시 파일 갱신을 방지합니다. **문서·질문 CSV를 동기화해도 RAG 배치 질문은 자동 시작되지 않습니다.**
+
+`main` Production의 일반 배포 정책은 별개이며, Staging의 내용 전용 필터와 혼동하지 않습니다.
+
+## 2. 서버 디렉터리와 데이터
+
+```text
+/opt/chatbot-service/
+├── staging/
+│   ├── .env                    # 서버 관리, Git 추적 대상 아님
+│   ├── compose.yaml
+│   ├── .current-image          # 배포 성공한 이미지 SHA
+│   └── .deployment.env         # Compose 이미지·마운트 정보
+├── prod/                       # Production도 동일한 구조
+├── storage/{staging,prod}/documents/
+│   ├── text_pdf/
+│   └── image_pdf/
+├── config/{staging,prod}/
+└── releases/{staging,prod}/
+
+/home/kuai/chatbot/
+├── staging/                    # develop checkout, 질문/결과 실행
+└── prod/                       # main checkout
+```
+
+- `/opt/chatbot-service`: **실행 중 서비스·데이터**를 관리합니다.
+- `~/chatbot/staging`: **Git 소스·질문 CSV·테스트 결과**를 관리합니다. 이 폴더에서 Python 배치를 실행합니다.
+- `rag_evaluation/results/`는 Git 무시 대상입니다. 소스 동기화 후에도 답변 CSV·JSONL·요약 파일이 유지됩니다.
+- Docker 캐시와 DB 영구 데이터는 Compose 설정과 실제 볼륨 구성에 따라 별도로 관리합니다.
+
+## 3. 서버 환경 변수와 네트워크
+
+각 환경의 설정은 관리자가 `/opt/chatbot-service/<환경>/.env`에 저장합니다.
 
 ```dotenv
-DATABASE_URL='postgresql://USER:URL_ENCODED_PASSWORD@CHATBOT_DB_HOST:5432/chatbot'
-OLLAMA_BASE_URL='http://HOST_REACHABLE_FROM_API:11434'
+DATABASE_URL='postgresql://USER:URL_ENCODED_PASSWORD@DB_HOST:5432/DB_NAME'
+OLLAMA_BASE_URL='http://OLLAMA_HOST_REACHABLE_FROM_CONTAINER:11434'
+EMBEDDING_MODEL=qwen3-embedding:0.6b
+LLM_MODEL=qwen3:8b
+API_BIND_ADDRESS=127.0.0.1
+API_PORT=18000
 ```
 
-이 값들은 예시 자리표시자다. 실제 주소는 서버의 네트워크에서 확인한다. bridge 컨테이너 내부의 `127.0.0.1`은 해당 컨테이너이므로 호스트 Ollama 주소로 사용할 수 없다. Ollama 설치·모델·서버 설정은 일반 코드 배포가 변경하지 않는다.
+위 `API_PORT=18000`은 **Staging 예시**이고 Production 기본값은 `8000`입니다. `DATABASE_URL`의 특수문자 비밀번호는 URL 인코딩합니다. 실제 DB와 모델은 환경별로 확인하세요.
 
-현재 남은 네트워크 배포 과제:
+**DB 구성의 기준은 해당 브랜치의 `deploy/<환경>/compose.yaml`입니다.** 현재 환경의 DB가 Compose 내부 서비스인지 별도 컨테이너인지 확인한 뒤 호스트명을 지정합니다. Staging과 Production은 DB 계정·데이터를 분리하고 업무일지 DB를 재사용하지 않습니다.
 
-- Compose의 기본 API 바인딩과 배포 검사는 아직 `127.0.0.1` 기준이다. 다른 컨테이너에서 접근하려면 수신 바인딩·공통 네트워크·alias를 함께 정비해야 한다.
-- 배포 스크립트의 host-side `/health` 검사도 현재 bridge 구성에 맞게 바꿔야 한다. 코드에 없는 수동 네트워크 연결은 재배포 시 보존되지 않을 수 있다.
-- staging과 production의 네트워크 이름과 DB 연결은 실제 서버에서 각각 확인한다. 이 문서나 단위 테스트 통과만으로 운영 연결이 검증된 것은 아니다.
+`OLLAMA_BASE_URL`은 **API 컨테이너 내부에서 접근 가능한** 주소여야 합니다. 컨테이너 안의 `127.0.0.1`은 호스트 서버를 가리키지 않습니다. 호스트 Ollama를 쓰는 경우 Docker의 `host.docker.internal` 매핑 또는 접근 가능한 호스트 네트워크 주소와 실제 listen 설정을 검증합니다.
 
-API는 `app` 사용자로 실행한다. 문서는 읽기 전용 마운트, Hugging Face 캐시는 `model-cache`, PaddleX OCR 캐시는 `ocr-cache` 볼륨으로 보관한다. 기존 마운트와 챗봇 DB 네트워크를 보존해야 한다. 모델 초기 로딩과 OCR은 `/health` 검사에 포함되지 않는다.
+API 포트는 기본적으로 호스트에 publish하지 않습니다. API 바인딩/네트워크를 바꾸려면 Compose·배포 사전 검사·호출 클라이언트를 함께 검토해야 합니다. 단순히 외부 포트를 열지 않습니다.
 
-## 3. GitHub 설정
-
-Repository secrets:
-
-| 이름 | 내용 |
-|---|---|
-| DEPLOY_HOST | 배포 서버, 현재 203.252.168.90 |
-| DEPLOY_PORT | SSH 포트, 현재 22 |
-| DEPLOY_USER | 배포 사용자, 현재 kuai |
-| DEPLOY_SSH_PRIVATE_KEY | 암호 없는 배포 개인키 전체 |
-| DEPLOY_HOST_KEY | 서버 ED25519 공개키 한 줄, `ssh-ed25519 AAAA...`; IP나 fingerprint 제외 |
-| PR_AUTOMATION_TOKEN | 규정 갱신·main→develop 동기화 PR 생성용 토큰. AI 저장소의 Contents 및 Pull requests 읽기·쓰기 권한 필요 |
-
-실행 시 알려진 서버 키와 엄격히 대조한다. `ssh-keyscan` 결과를 자동 신뢰하거나 host key 검사를 끄지 않는다. 현재 검증한 ED25519 fingerprint는 `SHA256:ABhropRIcPrirvVJcwgf/kTHeS2jLfMkaLwgsM0D4yg`다.
-
-Environments:
-
-- `staging`: 배포 브랜치 develop
-- `production`: 배포 브랜치 main
-- 선택 Variables: `STAGING_DEPLOY_ROOT`, `PRODUCTION_DEPLOY_ROOT`; 기본 `/opt/chatbot-service`
-- required reviewer는 팀의 운영 정책에 맞게 설정
-
-이미지 빌드는 `packages: write`, SSH 배포 job은 `packages: read`를 사용한다. 해당 실행의 `GITHUB_TOKEN`을 암호화된 SSH stdin으로 전달해 서버 GHCR에 로그인한다. 인증 파일은 서버 임시 디렉터리에만 만들고 배포 종료 시 삭제한다. DB 비밀번호는 서버 `.env`에만 보관한다.
-
-### 규정 자동 갱신의 인증 토큰 누락 해결
-
-`update-regulations.yml`은 checkout, 변경 브랜치 push, PR 생성에 `PR_AUTOMATION_TOKEN`을 사용한다. 이 Secret을 사용할 수 없으면 checkout에서 `Input required and not supplied: token` 오류로 종료하며 PDF 수집도 시작되지 않는다. `sync-main-to-develop.yml`도 같은 Secret을 사용한다.
-
-현재 workflow를 유지하는 최소 변경안은 다음과 같다.
-
-1. GitHub 개인 설정의 Developer settings → Personal access tokens → Fine-grained tokens에서 토큰을 생성한다.
-2. Resource owner를 `konkuk-icteam-student`, Repository access를 `Only select repositories` → `AI`로 지정한다. Repository permissions는 `Contents: Read and write`, `Pull requests: Read and write`로 제한한다. 만료일을 지정하고 조직 승인이 필요한 경우 승인을 완료한다. 토큰 소유자도 해당 저장소에 필요한 권한이 있어야 한다.
-3. AI 저장소의 Settings → Secrets and variables → Actions → New repository secret에서 이름을 정확히 `PR_AUTOMATION_TOKEN`으로 지정하고 토큰을 등록한다. 이 갱신 job은 Environment를 지정하지 않으므로 staging/production Environment에만 등록한 Secret은 사용하지 못한다. 토큰 값은 코드·문서·대화·로그에 남기지 않는다.
-4. Actions → Update Regulation PDFs → Run workflow에서 `main`을 선택해 검증한다. 파일 변경이 없으면 PR을 만들지 않고 종료하는 것이 정상이다. 변경이 있으면 갱신 브랜치 push, develop 대상 PR 생성, 해당 PR의 CI 실행까지 확인한다.
-5. 이후 예약 실행도 확인하고, 토큰 만료 또는 담당자 권한 변경 시 Secret을 교체한다. 규정 PDF 갱신 성공과 서버 RAG 인덱스 반영은 별도로 검증한다.
-
-`GITHUB_TOKEN`으로 단순 대체하면 인증 관리가 간단해지지만, 그 토큰으로 생성·갱신한 PR의 CI는 승인 대기 상태가 될 수 있다. 현재 자동 PR 흐름을 유지하려면 위 PAT 방식이 최소 변경안이다. 장기 팀 운영에는 AI 저장소에만 설치한 GitHub App이 적합하다. 이 경우 App 자격 증명을 등록하고 workflow에서 실행별 installation token을 발급받도록 변경해야 하며, 단기 installation token을 고정 Secret으로 저장하지 않는다.
-
-공식 참고: [토큰 생성과 권한 범위](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens), [GITHUB_TOKEN의 workflow 실행 규칙](https://docs.github.com/en/actions/concepts/security/github_token), [GitHub App의 Actions 인증](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/making-authenticated-api-requests-with-a-github-app-in-a-github-actions-workflow).
-
-## 4. 최초 서버 준비
-
-관리자가 배포 사용자에게 최상위 경로와 Docker 접근 권한을 준비한다. 이 서버의 kuai는 이미 docker 그룹에 추가되어 비대화식 SSH Docker 조회가 검증됐다.
+관리자 준비:
 
 ```bash
-sudo mkdir -p /opt/chatbot-service
-sudo chown kuai:kuai /opt/chatbot-service
-```
-
-검토한 코드의 서버 checkout에서 staging 환경을 만든다.
-
-```bash
+# /opt/chatbot-service 쓰기 권한은 배포 계정에 부여되어 있어야 함
 bash deploy/scripts/prepare-env.sh staging
+bash deploy/scripts/prepare-env.sh prod
 ```
 
-`Prepare staging environment` Actions도 동일한 스크립트를 SSH stdin으로 전달해 staging 환경을 준비한다. 컨테이너를 시작하지 않으며 설정 내용은 로그로 출력하지 않는다.
+`prepare-env.sh`는 비어 있는 환경설정을 생성하지만 **기존 .env 파일을 덮어쓰지 않습니다.** 실행 후 DB·Ollama 주소와 설치 모델을 관리자가 설정해야 합니다. 실제 `.env`와 SSH 개인키는 커밋하지 않습니다.
 
-이 스크립트는 `.env`를 600 권한으로 생성하고 기존 파일은 덮어쓰지 않는다. 새 파일의 `DATABASE_URL`과 `OLLAMA_BASE_URL`은 비어 있으므로 관리자가 실제 값을 설정해야 한다. DB 계정이나 비밀번호를 새로 만들지 않으며 문서 폴더만 미리 준비한다.
+## 4. GitHub Actions 설정
 
-```text
-/opt/chatbot-service/staging/.env
-/opt/chatbot-service/storage/staging/documents/text_pdf/
-/opt/chatbot-service/storage/staging/documents/image_pdf/
-```
+배포용 GitHub Secrets(Repository 또는 Environment에 실제 workflow와 맞춰 배치):
 
-실제 DB·Ollama 접근 주소를 설정하고 2절의 네트워크 과제를 해결한 뒤 배포한다. 관리자가 지정한 두 모델이 설치되어 있어야 한다. 새 환경 파일 생성만으로 DB나 Ollama 연결이 준비되는 것은 아니다.
+| Secret / Variable | 역할 |
+|---|---|
+| `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER` | SSH 서버 주소·포트·계정 |
+| `DEPLOY_SSH_PRIVATE_KEY` | Actions → 서버 접속용 개인키 |
+| `DEPLOY_HOST_KEY` | 신뢰할 수 있는 서버 ED25519 공개키 |
+| `PR_AUTOMATION_TOKEN` | 자동 규정 PR 및 main→develop 동기화 PR 생성 |
+| `STAGING_DEPLOY_ROOT`, `PRODUCTION_DEPLOY_ROOT` | 선택 변수; 기본 `/opt/chatbot-service` |
 
-운영 환경 준비는 staging 검증 후 `bash deploy/scripts/prepare-env.sh prod`로 별도로 수행한다. main 병합은 production 배포를 시작할 수 있으므로 운영 준비를 먼저 완료한다.
+서버 호스트 키는 검증된 지문과 대조하며 `StrictHostKeyChecking`을 해제하지 않습니다. `GITHUB_TOKEN`은 CI 빌드의 GHCR 인증에 사용합니다. 규정 갱신·PR 동기화 워크플로가 사용할 `PR_AUTOMATION_TOKEN`은 저장소 범위를 제한하고 만료/권한을 관리해야 합니다.
 
-## 5. 실제 SSH 배포 동작
+**RAG 답변 CSV 게시용 SSH Deploy Key**는 위 서버 배포 키와 별개입니다. 해당 키 설정은 [RAG 운영 가이드](rag_evaluation/README.md)를 참고합니다.
 
-`deploy-ssh.sh`는 환경·SHA·이미지·접속 인자를 검증하고 개인키를 runner 임시 파일에 저장한다. 서버 `.env` 존재를 확인한 뒤 다음 파일들만 SHA별 release 경로에 전송한다.
+## 5. Docker 배포 절차
 
-- staging/prod Compose와 `.env.example`
-- deploy.sh, health-check.sh, deploy-remote.sh
-- 프롬프트·검색 확장 설정
+일반 코드 Push 시의 흐름:
 
-PDF, 실제 `.env`, 개인키는 이 압축 파일에 포함하지 않는다. 원격 `deploy-remote.sh`는 단기 GHCR 인증을 준비하고 `deploy.sh`를 실행한다.
+1. GitHub Actions에서 단위 테스트를 실행하고 커밋 SHA로 Docker 이미지를 빌드합니다.
+2. GHCR에 이미지를 게시하고 SSH로 필요한 Compose/설정 파일만 해당 SHA의 release 디렉터리에 전달합니다.
+3. 서버에서 모델 존재·환경 변수 등을 확인한 뒤 Docker Compose로 이미지를 가져와 시작합니다.
+4. `/health` 및 실제 이미지 태그를 검사하여 성공을 확정합니다.
+5. `.current-image`·`.deployment.env`를 기록하고 소스 체크아웃을 같은 SHA로 fast-forward합니다.
 
-`deploy.sh`는 설치된 Ollama 모델을 확인하고 설정 파일을 복사한 뒤 `docker compose pull`과 `up --wait --wait-timeout 180`으로 API를 시작한다. 실제 API 컨테이너 이미지가 요청한 SHA인지 확인하고 `/health`를 검사한다. 성공 시 `.current-image`와 `.deployment.env`를 기록한다.
+실제 비밀번호·PDF 원본·GitHub 개인키는 release 아카이브에 포함하지 않습니다. CI가 성공해도 서버 네트워크, Ollama 품질, 검색 정확성까지 보장하는 것은 아닙니다.
 
-동시 배포는 환경별 하나만 실행한다. 진행 중 배포를 새 실행 때문에 취소하지 않는다. 기본 브랜치에 workflow가 없는 동안은 새로운 `workflow_dispatch`를 시작할 수 없으므로 develop push 또는 준비한 검증 브랜치 trigger를 사용한다. 기능 PR을 develop에 병합하면 staging 배포가 시작된다.
-
-## 서버 소스 체크아웃 자동 동기화 (RAG 일괄 테스트)
-
-`develop` push가 성공적으로 staging에 배포되면 SSH 배포 사용자 (`DEPLOY_USER=kuai`)의 `$HOME/chatbot/staging`에 `develop` 브랜치 소스를 동기화한다. `main` push로 production이 성공적으로 배포되면 `$HOME/chatbot/prod`에 `main` 소스를 동기화한다.
-
-```text
-/home/kuai/chatbot/
-├── staging/   # develop: scripts/, rag_evaluation/questions/, results/ ...
-└── prod/      # main: scripts/, rag_evaluation/questions/, results/ ...
-```
-
-- 최초 배포: 대상 폴더가 비어 있으면 공개 GitHub 저장소를 해당 브랜치로 clone한다. 서버의 `git`과 github.com으로의 HTTPS 연결이 필요하다.
-- 이후 배포: origin과 브랜치를 검증하고 `git fetch` + fast-forward 병합으로 **검증된 Docker 이미지와 동일한 커밋 SHA**까지 갱신한다.
-- 추적 파일에 로컬 수정이 있거나 기존 폴더가 비어 있지 않은 비-Git 폴더라면 안전을 위해 동기화를 중단한다. 기존 데이터를 지우거나 `git reset --hard`로 덮어쓰지 않는다(최초 빈 폴더 clone 직후의 SHA 고정은 예외).
-- `rag_evaluation/results/`에서 생성되는 결과는 Git 무시 대상이므로 push되지 않고 서버에 유지된다. 원본 질문 CSV는 Git으로 버전 관리한다.
-- 소스 체크아웃 동기화는 **기존 /opt/chatbot-service Docker 배포가 건강 상태 검증을 통과한 다음에** 실행한다. 코드 복제본은 실행 중인 Docker 마운트나 DB와 분리된다.
-- Docker가 정상 배포되어도 Git 네트워크/권한 문제로 소스 동기화가 실패하면 workflow는 실패를 표시하지만, 이미 검증된 컨테이너를 롤백하거나 자동 중지하지 않는다. 원인 해결 후 재실행한다.
-
-배포 후 호스트에서 테스트:
-
-```bash
-cd ~/chatbot/staging
-python3 scripts/run_rag_batch.py --limit 3
-ls -lh rag_evaluation/results/
-git branch --show-current   # develop
-```
-
-**주의:** staging/prod Docker 배포는 기존 `/opt/chatbot-service`를 계속 사용한다. `~/chatbot/staging`, `~/chatbot/prod`는 테스트·소스 확인용 디렉터리이며 Git push만으로 질의가 자동 실행되지는 않는다.
-
-## 6. 상태 확인
-
-배포 성공 후 서버의 해당 환경 디렉터리에서 실행한다.
+### 상태 확인 (Staging)
 
 ```bash
 cd /opt/chatbot-service/staging
+docker ps --filter name=chatbot-staging
 
 dc() {
   docker compose --env-file .env --env-file .deployment.env -f compose.yaml "$@"
 }
 
-dc ps -a
-dc images api
+dc ps
 dc logs --tail=100 api
 dc exec -T api curl --fail http://127.0.0.1:18000/health
 cat .current-image
+
+# 서버의 develop 소스 동기화 확인
+git -C ~/chatbot/staging branch --show-current
+git -C ~/chatbot/staging rev-parse --short HEAD
 ```
 
-production은 디렉터리 `prod`, API 포트 `8000`이다. `.deployment.env`는 첫 성공 전에는 없을 수 있다. 실제 설정 전체를 로그로 출력하면 비밀번호가 노출될 수 있으므로 공유하지 않는다.
+Production은 `/opt/chatbot-service/prod`와 API 내부 포트 `8000`을 사용합니다. 첫 배포 전에는 `.deployment.env`와 `.current-image`가 없을 수 있습니다. 설정 전체를 로그에 출력해 DB 비밀번호를 유출하지 마세요.
 
-health는 DB 연결과 테이블 조회를 확인하며 모델 이름은 설정값을 보여준다. 청크 0건도 health가 성공할 수 있다. 따라서 실제 규정 질의, Ollama의 GPU/모델 응답, reranker 첫 로딩, FAQ 동기화, Spring 연동은 별도 검증한다.
+### 실패 시 확인 순서
 
-## 7. PDF·데이터 갱신
+1. GitHub Actions의 해당 빌드·배포 job에서 **어느 단계가 실패했는지** 확인합니다.
+2. 서버에서 `docker ps`, `docker logs`, `.current-image`, Compose health 상태를 확인합니다.
+3. SSH/배포 실패와 소스 체크아웃 동기화 실패를 구분합니다. 소스 동기화가 실패해도 이미 건강하게 기동한 Docker 컨테이너가 유지될 수 있습니다.
+4. 설정 변경이 필요하면 서버 `.env`를 수정하고 해당 배포 워크플로를 재실행합니다.
 
-원본 PDF는 코드 이미지에 포함하지 않는다. 검토한 전체 PDF 집합을 환경별 documents에 배치하고 DB/PDF를 백업한 다음 해당 환경에서 색인한다.
+## 6. PDF 인덱싱·복구 원칙
+
+PDF 인덱싱은 배포와 독립된 작업입니다. 환경별 문서 폴더 및 DB 백업을 확인한 뒤 승인된 작업 시간에 실행합니다.
 
 ```bash
+cd /opt/chatbot-service/staging
+# 위에서 정의한 dc() 함수 사용
 dc exec -T api python -m app.ingestion.service
 ```
 
-이 명령은 `regulation_chunks`와 `phone_contacts`를 초기화한다. 현재 전체 교체 방식과 트랜잭션 경계는 유지된다. 일부 문서 처리 실패나 전화번호 저장 실패가 완료 로그와 함께 발생할 수 있으므로 실패 파일·데이터 수·출처·대표 질의를 확인한다. 일반 코드 배포는 색인을 자동 실행하지 않는다. 기존 운영 FAQ도 새 AI DB로 자동 복제되지 않는다.
+**이 명령은 기존 `regulation_chunks`와 `phone_contacts`를 비우고 새 데이터를 저장**하므로 대상 DB·PDF 목록·백업을 먼저 확인합니다. 부분적인 PDF 처리 실패가 있더라도 인덱싱 완료 로그가 나올 수 있으므로 실패 목록·청크 수·출처를 따로 검증합니다.
 
-## 8. 복구 범위
-
-배포 실패 시 `.current-image`의 이전 API 이미지로 복구를 시도하고 실행 이미지/health를 다시 확인한다. 첫 배포는 이전 이미지가 없을 수 있다. 복구에 성공해도 workflow는 실패로 표시된다.
-
-현재 복구는 API 이미지에 대한 동작이다. DB, 스키마, PDF, `.env`, 복사한 Compose·프롬프트·검색 설정은 이전 버전으로 되돌리지 않는다. 데이터 갱신 실패는 검증한 백업과 별도 데이터 복구 절차로 처리한다. `docker compose down -v`를 일반 재배포에 사용하지 않는다.
-
-## 9. 검증과 운영 기록
-
-- PR CI 결과와 실제 SSH 배포 성공을 구분한다.
-- 실제 서버 Docker 상태·이미지 SHA·health·청크 수를 기록한다.
-- 근거가 있는 대표 질문으로 검색·출처·LLM 응답 시간을 확인한다.
-- Spring→AI 실제 연결과 FAQ 생성/수정/삭제 동기화를 확인한다.
-- DB/PDF 백업을 별도 환경에 실제 복원해 검증한다.
-- 현재/이전 정상 SHA 이미지를 GHCR에 보관하고 복구를 연습한다.
-
-로컬 배포 테스트는 Docker·curl·Ollama를 대체해 환경 보호, 실행 이미지 확인, 실패 시 이전 이미지 복구, 단기 registry 인증 제거를 검사한다. 실제 GPU 질의나 서버 배포를 대신하지 않는다.
+배포 오류 시 배포 스크립트는 이전 API 이미지로 복구를 시도합니다. **DB·PDF·환경설정·스키마까지 자동 롤백하지는 않습니다.** Docker 볼륨 삭제(`docker compose down -v`, `docker volume prune`)는 일반 배포·장애 복구 절차에 포함하지 않습니다.
