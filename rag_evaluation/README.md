@@ -1,6 +1,6 @@
 # RAG 질문 CSV 일괄 테스트 및 결과 게시
 
-GitHub `develop`에 질문 CSV를 올리고 서버 Staging 챗봇으로 실행한 뒤, **답변 CSV를 생성하고 결과 전용 GitHub 브랜치에 게시**하는 절차입니다.
+GitHub `develop`에 질문 CSV를 올리고 서버 Staging 챗봇으로 실행한 뒤, **답변 CSV와 요약 JSON을 생성하고 결과 전용 GitHub 브랜치에 게시**하는 절차입니다.
 
 ## 1. 입력 파일 준비
 
@@ -114,15 +114,16 @@ ls -lht rag_evaluation/results/
 cat rag_evaluation/results/*_summary.json
 ```
 
-## 5. GitHub에 완성된 답변 CSV 게시
+## 5. GitHub에 완성된 답변 CSV·요약 JSON 게시
 
-코드 브랜치인 `develop`에 자동으로 결과를 Push하지 않습니다. **`rag-results/staging` 결과 전용 브랜치**로만 게시하므로 Docker 배포를 유발하지 않습니다.
+코드 브랜치인 `develop`에 자동으로 결과를 Push하지 않습니다. **`rag-results/staging` 결과 전용 브랜치**로만 게시하므로 Docker 배포를 유발하지 않습니다. 각 완료된 실행의 `*_answers.csv`와 동일 이름의 `*_summary.json`을 **하나의 Git 커밋**에 함께 저장합니다.
 
 | 구분 | GitHub 브랜치 | 경로 |
 |---|---|---|
 | 질문 입력 | `develop` | `rag_evaluation/questions/` |
-| 성공적으로 완료된 답변 CSV | `rag-results/staging` | `rag_evaluation/results/staging/` |
-| Raw JSONL·요약 JSON·미완료 답변 | 자동 게시 안 함 | 서버 `rag_evaluation/results/`에 보관 |
+| 완료된 답변 CSV (`*_answers.csv`) | `rag-results/staging` | `rag_evaluation/results/staging/` |
+| 해당 답변의 요약 JSON (`*_summary.json`) | `rag-results/staging` | `rag_evaluation/results/staging/` |
+| Raw JSONL (`*_raw.jsonl`)·미완료 결과 | 자동 게시 안 함 | 서버 `rag_evaluation/results/`에 보관 |
 
 **기존 완성 결과 게시:**
 
@@ -145,9 +146,9 @@ python3 scripts/run_rag_batch.py \
   --publish-results
 ```
 
-게시 도구는 해당 실행의 **모든 문항이 `OK`이고 미처리가 0개**일 때만 `*_answers.csv`를 게시합니다. 부분 실행·오류가 남은 파일은 올리지 않습니다. 게시 실패 시 서버 원본 파일은 유지되며 같은 명령으로 재시도할 수 있습니다.
+게시 도구는 해당 실행의 **모든 문항이 `OK`이고 미처리가 0개**일 때만 `*_answers.csv`와 짝을 이루는 `*_summary.json`을 함께 게시합니다. 부분 실행·오류가 남은 파일은 올리지 않습니다. 게시 실패 시 서버 원본 파일은 유지되며 같은 명령으로 재시도할 수 있습니다.
 
-결과 위치: [GitHub RAG Staging 답변](https://github.com/konkuk-icteam-student/AI/tree/rag-results/staging/rag_evaluation/results/staging)
+결과 위치: [GitHub RAG Staging 답변 및 요약](https://github.com/konkuk-icteam-student/AI/tree/rag-results/staging/rag_evaluation/results/staging)
 
 ### GitHub 게시용 SSH 인증 (서버 계정당 준비)
 
