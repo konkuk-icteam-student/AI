@@ -198,7 +198,7 @@ def main(argv=None):
     parser.add_argument('--pause', type=float, default=0)
     parser.add_argument('--run-id', help='이어하기용 실행 ID (예: 20261104_154500)')
     parser.add_argument('--publish-results', action='store_true',
-                        help='질문 처리가 끝난 후 모든 답변이 OK인 결과 CSV를 GitHub에 Push')
+                        help='모든 문항이 OK인 답변 CSV와 요약 JSON을 GitHub에 Push')
     parser.add_argument('--publish-environment', choices=('staging', 'prod'), default='staging',
                         help='GitHub 결과 브랜치 선택 (기본값: staging)')
     args = parser.parse_args(argv)
