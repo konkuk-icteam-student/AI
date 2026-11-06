@@ -1,4 +1,4 @@
-"""RAG answer CSV publisher tests; all Git remotes are local temporary directories."""
+"""RAG answer CSV + summary publisher tests; all remotes are local repositories."""
 import importlib.util
 import json
 from pathlib import Path
@@ -42,7 +42,7 @@ class RagResultsPublishingTest(unittest.TestCase):
         self.assertEqual(publisher.completed_csvs(self.results, '20261104_165001'), [])
         self.assertEqual(publisher.completed_csvs(self.results, '20261104_165000'), [ready])
 
-    def test_publish_only_answer_csv_without_touching_deployment_branches(self):
+    def test_publish_answer_csv_and_summary_without_raw(self):
         origin = self.root / 'origin.git'
         seed = self.root / 'seed'
         git('init', '--bare', str(origin))
@@ -67,6 +67,10 @@ class RagResultsPublishingTest(unittest.TestCase):
         git('clone', '--branch', 'rag-results/staging', str(origin), str(downloaded))
         uploaded = downloaded / 'rag_evaluation/results/staging' / good.name
         self.assertEqual(uploaded.read_text(encoding='utf-8'), good.read_text(encoding='utf-8'))
+        expected_summary = self.results / '20261104_165000_regulations_summary.json'
+        remote_summary = downloaded / 'rag_evaluation/results/staging' / expected_summary.name
+        self.assertEqual(remote_summary.read_text(encoding='utf-8'),
+                         expected_summary.read_text(encoding='utf-8'))
         self.assertFalse((downloaded / 'rag_evaluation/results/staging' / rawfile.name).exists())
 
         next_csv = self.answer('20261104_170000', label='faq')
@@ -74,6 +78,21 @@ class RagResultsPublishingTest(unittest.TestCase):
         git('pull', cwd=downloaded)
         self.assertTrue(uploaded.exists())
         self.assertTrue((downloaded / 'rag_evaluation/results/staging' / next_csv.name).exists())
+        self.assertTrue((downloaded / 'rag_evaluation/results/staging'
+                         / '20261104_170000_faq_summary.json').exists())
+
+    def test_missing_summary_does_not_publish(self):
+        csv_path = self.results / '20261104_165000_missing_answers.csv'
+        csv_path.write_text('ID,AI 답변\n1,안내\n', encoding='utf-8')
+        self.assertEqual(publisher.completed_csvs(self.results), [])
+
+    def test_partial_result_summary_is_not_published(self):
+        csv_path = self.answer(success=1, total=2)
+        self.assertEqual(publisher.completed_csvs(self.results), [])
+        summary_path = csv_path.with_name('20261104_165000_regulations_summary.json')
+        summary_path.write_text(json.dumps({'total': 2, 'success': 2,
+                                            'not_run': 0}), encoding='utf-8')
+        self.assertEqual(publisher.completed_csvs(self.results), [csv_path])
 
 
 if __name__ == '__main__':
