@@ -19,7 +19,20 @@ scripts/run_rag_batch.py  # 일괄 실행 스크립트
 
 ## 서버에서 실행
 
-`develop` 배포가 성공하면 `/home/kuai/chatbot/staging`에 이 저장소가 자동으로 동기화됩니다. `main` 배포가 성공하면 `/home/kuai/chatbot/prod`에 동기화됩니다. 두 폴더는 Git 브랜치를 추적하며 결과 파일은 유지합니다. Docker 배포 경로 `/opt/chatbot-service`와는 별개입니다.
+`develop` Push 시 변경 파일 종류에 따라 서버 반영 방식이 달라집니다.
+
+| develop Push의 변경 내용 | 실행되는 GitHub Actions | 서버에서 바뀌는 부분 |
+|---|---|---|
+| `*.md` 문서만 수정 | `Sync staging documentation and question CSVs` | `~/chatbot/staging` Git 소스만 갱신 (Docker **미재배포**) |
+| `rag_evaluation/questions/` 질문 CSV만 추가·수정 | 위와 동일 | 질문 CSV 동기화 (Docker **미재배포**) |
+| Python, Compose, GitHub Actions 등 코드·설정 파일 변경 (문서/CSV 포함 여부 무관) | `Deploy staging` | Docker 이미지 빌드 및 배포 성공 후 소스 동기화 |
+| GitHub 결과 브랜치 `rag-results/staging`에 답변 CSV Push | Staging Actions 실행 안 함 | Staging Docker/소스에 영향 없음 |
+
+소스-only 동기화는 **현재 실행 중인 Docker 이미지의 Git SHA**와 업로드된 커밋을 비교하여, 그 사이에 코드/설정 변경이 있으면 실행을 거부합니다. Docker 배포와 같은 잠금을 사용하며 `rag_evaluation/results/`의 로컬 결과 파일을 유지합니다.
+
+**주의:** 이 변경을 담은 PR 자체는 GitHub Actions 파일과 Bash 코드 변경이므로, 처음 `develop`에 병합할 때는 **1회 전체 Staging 재배포가 실행**됩니다. 진행 중인 질문 테스트가 끝난 뒤 병합해야 합니다. 이후 문서/질문 CSV만 Push하면 Docker 재배포 없이 동기화합니다.
+
+`main` 배포가 성공하면 `/home/kuai/chatbot/prod`에 동기화됩니다. Production의 배포 필터는 이 PR에서 변경하지 않습니다. Docker 배포 경로 `/opt/chatbot-service`는 질문 테스트용 소스와 별개입니다.
 
 Python 3.6 이상, Docker CLI, 실행 중인 RAG 컨테이너의 `curl`이 필요합니다. **호스트 서버**에서 실행하므로 외부 포트를 공개할 필요가 없습니다.
 
