@@ -1,6 +1,6 @@
 # AI RAG CI/CD 및 서버 운영 가이드
 
-이 문서는 **현재 GitHub Actions + SSH + Docker Compose 배포 구조**의 운영 절차를 설명합니다. 과거 서버 이력이나 특정 장애 해결 로그는 포함하지 않습니다.
+GitHub Actions에서 SSH로 서버에 접속해 Docker Compose를 배포하는 구조와, 환경별 소스 동기화·점검·복구 절차를 설명합니다.
 
 - 서비스 기능과 로컬 실행: [README](README.md)
 - 질문 CSV 업로드·답변 생성·결과 게시: [RAG 운영 가이드](rag_evaluation/README.md)
