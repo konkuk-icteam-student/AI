@@ -6,7 +6,7 @@
 
 | 문서 | 대상 및 내용 |
 |---|---|
-| **[RAG 질문 CSV 운영 가이드](rag_evaluation/README.md)** | 질문 CSV를 GitHub에 올리고, 서버에서 답변을 생성하고, 결과를 GitHub에 게시 |
+| **[RAG 질문 CSV 운영 가이드](rag_evaluation/README.md)** | 질문 CSV를 GitHub에 올리고, 서버에서 답변을 생성하고, 답변 CSV·요약 JSON을 GitHub에 게시 |
 | **[배포·서버 운영](DEPLOYMENT.md)** | 브랜치/CI/CD, Docker, 서버 디렉터리, 환경 변수, 상태 확인, 장애 복구 |
 | **[테스트 가이드](TEST_MANUAL.md)** | 로컬 단위 테스트, 통합 테스트, FAQ/챗봇 API 검증 |
 
@@ -68,7 +68,7 @@ rag_evaluation/
 
 scripts/
 ├── run_rag_batch.py        # 질문 실행 및 답변 CSV 생성
-└── publish_rag_results.py  # 완료된 답변 CSV를 결과 전용 브랜치에 게시
+└── publish_rag_results.py  # 완료된 답변 CSV·요약 JSON을 결과 전용 브랜치에 게시
 
 deploy/
 ├── staging/compose.yaml
@@ -112,7 +112,7 @@ python -m unittest discover -s tests -v
 | `develop`: Markdown/질문 CSV만 변경 | Staging의 `~/chatbot/staging` Git 체크아웃만 동기화, Docker 재시작 없음 |
 | `develop` → `main` PR | Production 승격 절차 |
 | `main` Push | Production 배포 |
-| `rag-results/staging` Push | 완료된 답변 CSV 저장; Docker 배포 트리거 없음 |
+| `rag-results/staging` Push | 완료된 답변 CSV·요약 JSON 저장; Docker 배포 트리거 없음 |
 
 실제 워크플로는 `.github/workflows/`에 있습니다. 문서·CSV 전용 동기화에서도 **기존 실행 중인 Docker 컨테이너는 변경하지 않으며**, 코드 변경이 포함되면 일반 배포를 수행합니다.
 
